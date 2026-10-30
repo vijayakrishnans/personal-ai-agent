@@ -142,6 +142,10 @@ Settings (☰) → **Knowledge** draws them as a graph: you in the centre, each
 space a hub, each fact around its hub. Click a fact to move it to another
 space or remove it, click a space to rename it, or add a fact yourself.
 
+## On a phone
+
+On a phone the page fits the screen. The header is one row of icons: ☰ (your conversations), the model, ⤓ (download the chat), + (new chat) and ⚙ (settings). The sidebar slides in from the left and closes when you pick a chat, tap outside it, or press Escape. Settings fills the screen, with tabs that scroll sideways.
+
 ## Conversations
 
 Every conversation is saved with the agent after each answer, with any
@@ -272,7 +276,9 @@ Maps come from **OpenStreetMap**, with no key. `showMap` finds places by name
 restaurants, cafes, hotels, sights, museums, beaches, pharmacies, ATMs, fuel
 and more near a place (Overpass). The page draws the map itself from
 OpenStreetMap's tiles: the places numbered, the route as a line, zoom
-buttons, and the places listed with their links, hours and websites. The
+buttons, and the places listed. Drag a map to move it, with the mouse or
+one finger. Pinch or double-click to zoom, and press ⌖ to go back to the
+start. The places are listed with their links, hours and websites. The
 built-in **trip-planner** skill uses all three. A map is the only thing the
 page loads from outside the Worker. OpenStreetMap's data is edited by anyone,
 so its tools count as reading the web.
