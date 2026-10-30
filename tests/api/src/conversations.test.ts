@@ -283,6 +283,13 @@ describe("the page's script", () => {
     expect(page("x")).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
   });
 
+  it("maps drag, pinch and go back to the start, and a drag is not a click on a pin", () => {
+    expect(script()).toContain("box.addEventListener('pointermove'");
+    expect(script()).toContain("title: 'Back to the start'");
+    expect(page("x")).toContain(".map{position:relative;width:600px;max-width:100%;height:320px;overflow:hidden;cursor:grab;touch-action:none");
+    expect(script()).toMatch(/addEventListener\('click', \(e\) => \{ if \(moved\)/);
+  });
+
   it("fits a phone: the sidebar is a drawer opened from the header", () => {
     expect(page("x")).toContain('interactive-widget=resizes-content');
     expect(page("x")).toMatch(/<button id="chats-open"[^>]*aria-controls="side"/);

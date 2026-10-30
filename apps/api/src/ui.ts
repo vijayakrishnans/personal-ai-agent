@@ -384,7 +384,8 @@ const SCRIPT = String.raw`
 
   // MAPS, drawn here from OpenStreetMap's tiles: the places numbered, a
   // route as a line, zoom buttons, the credit OpenStreetMap asks for, and
-  // the places listed with links.
+  // the places listed with links. Drag to move it (one finger or the
+  // mouse), pinch or double-click to zoom, ⌖ to go back to the start.
   const TILE = 256;
   function project(lat, lon, z) {
     const n = TILE * Math.pow(2, z), s = Math.sin(Math.max(-85, Math.min(85, lat)) * Math.PI / 180);
@@ -395,19 +396,26 @@ const SCRIPT = String.raw`
     const W = 600, H = 320;
     const pts = (view.places || []).map((p) => [p.lat, p.lon]).concat(view.route ? view.route.line : []);
     if (!pts.length) return el('span');
-    let z = 15;
+    let z0 = 15;
     if (pts.length > 1) {
-      for (z = 16; z > 1; z--) {
-        const px = pts.map((p) => project(p[0], p[1], z));
+      for (z0 = 16; z0 > 1; z0--) {
+        const px = pts.map((p) => project(p[0], p[1], z0));
         const xs = px.map((p) => p[0]), ys = px.map((p) => p[1]);
         if (Math.max(...xs) - Math.min(...xs) <= W - 70 && Math.max(...ys) - Math.min(...ys) <= H - 70) break;
       }
     }
+    // The centre is kept as a fraction of the world (0–1 each way), so it
+    // stays put when the zoom changes.
+    const world = (zz) => TILE * Math.pow(2, zz);
+    const start = (() => {
+      const px = pts.map((p) => project(p[0], p[1], z0));
+      const xs = px.map((p) => p[0]), ys = px.map((p) => p[1]);
+      return [(Math.min(...xs) + Math.max(...xs)) / 2 / world(z0), (Math.min(...ys) + Math.max(...ys)) / 2 / world(z0)];
+    })();
+    let z = z0, centre = start.slice();
     const stage = el('div', { className: 'map-stage' });
     const draw = () => {
-      const px = pts.map((p) => project(p[0], p[1], z));
-      const xs = px.map((p) => p[0]), ys = px.map((p) => p[1]);
-      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const cx = centre[0] * world(z), cy = centre[1] * world(z);
       const n = Math.pow(2, z), at = (e, x, y) => { e.style.left = 'calc(50% + ' + Math.round(x) + 'px)'; e.style.top = 'calc(50% + ' + Math.round(y) + 'px)'; return e; };
       const parts = [];
       for (let tx = Math.floor((cx - W / 2) / TILE); tx <= Math.floor((cx + W / 2) / TILE); tx++) {
@@ -429,9 +437,48 @@ const SCRIPT = String.raw`
     };
     draw();
     const zoom = (d) => { z = Math.max(2, Math.min(18, z + d)); draw(); };
-    const box = el('div', { className: 'map' }, stage,
-      el('div', { className: 'map-zoom' }, el('button', { type: 'button', textContent: '+', title: 'Zoom in', onclick: () => zoom(1) }), el('button', { type: 'button', textContent: '−', title: 'Zoom out', onclick: () => zoom(-1) })),
+    const reset = () => { z = z0; centre = start.slice(); draw(); };
+    const box = el('div', { className: 'map', title: 'Drag to move · pinch or double-click to zoom' }, stage,
+      el('div', { className: 'map-zoom' }, el('button', { type: 'button', textContent: '+', title: 'Zoom in', onclick: () => zoom(1) }), el('button', { type: 'button', textContent: '−', title: 'Zoom out', onclick: () => zoom(-1) }), el('button', { type: 'button', textContent: '⌖', title: 'Back to the start', onclick: reset })),
       el('div', { className: 'map-credit' }, '© ', link('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' contributors'));
+    // Dragging: every pointer on the map is followed; one moves the map,
+    // two pinch to zoom. A drag is not a click, so a pin dragged over
+    // does not open.
+    const down = new Map();
+    let moved = false, pinch = 0, frame = 0;
+    const redraw = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); };
+    const gap = () => { const [a, b] = [...down.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]); };
+    box.addEventListener('pointerdown', (e) => {
+      if (e.button || e.target.closest('.map-zoom, .map-credit')) return;
+      down.set(e.pointerId, [e.clientX, e.clientY]);
+      if (down.size === 1) moved = false;
+      if (down.size === 2) { pinch = gap(); for (const id of down.keys()) box.setPointerCapture(id); }
+    });
+    box.addEventListener('pointermove', (e) => {
+      const last = down.get(e.pointerId);
+      if (!last) return;
+      const dx = e.clientX - last[0], dy = e.clientY - last[1];
+      down.set(e.pointerId, [e.clientX, e.clientY]);
+      if (down.size === 2) {
+        const now = gap();
+        if (now > pinch * 1.5 || now < pinch / 1.5) { zoom(now > pinch ? 1 : -1); pinch = now; moved = true; }
+        return;
+      }
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 3) { down.set(e.pointerId, last); return; }
+      if (!moved) { moved = true; box.setPointerCapture(e.pointerId); box.classList.add('dragging'); }
+      centre = [centre[0] - dx / world(z), Math.max(0, Math.min(1, centre[1] - dy / world(z)))];
+      redraw();
+    });
+    const up = (e) => { down.delete(e.pointerId); if (!down.size) box.classList.remove('dragging'); if (down.size === 1) pinch = 0; };
+    box.addEventListener('pointerup', up);
+    box.addEventListener('pointercancel', up);
+    box.addEventListener('click', (e) => { if (moved) { e.preventDefault(); e.stopPropagation(); moved = false; } }, true);
+    box.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.map-zoom, .map-credit, .pin')) return;
+      const r = box.getBoundingClientRect();
+      centre = [centre[0] + (e.clientX - r.left - r.width / 2) / world(z), centre[1] + (e.clientY - r.top - r.height / 2) / world(z)];
+      zoom(1);
+    });
     const about = el('div', { className: 'map-about' }, el('strong', { textContent: view.title }));
     if (view.route) about.append(el('p', {}, view.route.km + ' km · ' + duration(view.route.minutes) + ' by ' + view.route.mode + ' · ', link(view.route.directions, 'Turn-by-turn directions')));
     about.append(el('ol', {}, ...view.places.map((p) => el('li', {}, link(p.url, p.name), [p.kind, p.address, p.hours].filter(Boolean).length ? ' — ' + [p.kind, p.address, p.hours].filter(Boolean).join(' · ') : '', ...(p.website && /^https?:/.test(p.website) ? [' · ', link(p.website, 'website')] : [])))));
@@ -1103,8 +1150,8 @@ main{flex:1;display:flex;min-height:0}
 #library-music{list-style:none;margin:0;padding:0;display:grid;gap:12px;max-width:560px}
 #library-music>li>.row{align-items:center}#library-music>li>.row button{font-size:12px;padding:2px 8px}
 .map-wrap{margin:8px 0 0;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-width:0}
-.map{position:relative;width:600px;max-width:100%;height:320px;overflow:hidden;border-radius:10px;border:1px solid var(--line);background:#e8e6df}
-.map-stage{position:absolute;inset:0}
+.map{position:relative;width:600px;max-width:100%;height:320px;overflow:hidden;cursor:grab;touch-action:none;user-select:none;border-radius:10px;border:1px solid var(--line);background:#e8e6df}
+.map-stage{position:absolute;inset:0}.map.dragging{cursor:grabbing}.map.dragging .pin{pointer-events:none}
 .map img.tile{position:absolute;width:256px;height:256px;max-width:none;margin:0;user-select:none}
 .map-route{position:absolute;left:50%;top:50%;overflow:visible;pointer-events:none}
 .map-route polyline{fill:none;stroke:#3b5bdb;stroke-width:5;stroke-linejoin:round;stroke-linecap:round;opacity:.85}

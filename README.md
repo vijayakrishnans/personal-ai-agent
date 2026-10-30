@@ -276,7 +276,9 @@ Maps come from **OpenStreetMap**, with no key. `showMap` finds places by name
 restaurants, cafes, hotels, sights, museums, beaches, pharmacies, ATMs, fuel
 and more near a place (Overpass). The page draws the map itself from
 OpenStreetMap's tiles: the places numbered, the route as a line, zoom
-buttons, and the places listed with their links, hours and websites. The
+buttons, and the places listed. Drag a map to move it, with the mouse or
+one finger. Pinch or double-click to zoom, and press ⌖ to go back to the
+start. The places are listed with their links, hours and websites. The
 built-in **trip-planner** skill uses all three. A map is the only thing the
 page loads from outside the Worker. OpenStreetMap's data is edited by anyone,
 so its tools count as reading the web.
