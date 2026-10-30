@@ -7,8 +7,9 @@
 // stay in the browser (localStorage); models and memories are read from and
 // written to /api with the key as a bearer token. The sidebar lists what the
 // agent remembers by space; ☰ opens the settings — the knowledge graph of
-// those spaces, the Hugging Face models, and access — the kill switch
-// that pauses the agent, and locking this browser.
+// those spaces, the owner's notes and to-dos, the Hugging Face models, and
+// access — the kill switch, what the agent did, and locking this browser.
+// Images the agent draws are shown in the chat, fetched with the key.
 
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
@@ -41,6 +42,11 @@ main{flex:1;display:flex;min-height:0}
 .msg{max-width:46rem;padding:10px 14px;border-radius:12px;background:var(--panel);border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
 .msg.user{align-self:flex-end;background:var(--me)}
 .msg .meta{display:block;margin-top:6px;font-size:12px;color:var(--muted)}
+.msg img{display:block;max-width:min(100%,512px);border-radius:10px;margin-top:8px;background:var(--line);aspect-ratio:1}
+#notes-lists{display:grid;gap:20px}
+#notes-lists li{align-items:center}
+#notes-lists li label{display:flex;gap:8px;align-items:flex-start;flex:1;cursor:pointer}
+#notes-lists li.done span{text-decoration:line-through;color:var(--muted)}
 .msg.error{border-color:var(--warn);color:var(--warn)}
 #paused{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--warn);color:var(--warn);background:var(--panel);font-size:14px}
 #paused span{flex:1}
@@ -143,6 +149,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
       <h2 id="settings-title">Settings</h2>
       <div id="tabs" role="tablist">
         <button type="button" role="tab" data-tab="knowledge">Knowledge</button>
+        <button type="button" role="tab" data-tab="notes">Notes</button>
         <button type="button" role="tab" data-tab="models">Models</button>
         <button type="button" role="tab" data-tab="access">Access</button>
       </div>
@@ -165,6 +172,21 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
           </form>
           <datalist id="space-names"></datalist>
         </section>
+      </div>
+    </section>
+    <section class="tab" id="tab-notes" role="tabpanel" hidden>
+      <div class="models">
+        <section>
+          <h2>Add a note or a to-do</h2>
+          <form class="stack" id="note-form">
+            <input id="note-text" placeholder="e.g. Buy cardamom" maxlength="1000" required>
+            <input id="note-list" placeholder="List — e.g. Groceries (default: Notes)" maxlength="40" list="list-names">
+            <button>Add</button>
+            <p class="hint" id="note-note"></p>
+          </form>
+          <datalist id="list-names"></datalist>
+        </section>
+        <div id="notes-lists"></div>
       </div>
     </section>
     <section class="tab" id="tab-models" role="tabpanel" hidden>
@@ -249,10 +271,25 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     const div = document.createElement('div');
     div.className = 'msg ' + m.role + (m.error ? ' error' : '');
     div.textContent = m.content;
+    for (const im of m.images || []) div.appendChild(picture(im));
     if (m.meta) { const s = document.createElement('span'); s.className = 'meta'; s.textContent = m.meta; div.appendChild(s); }
     $('log').appendChild(div);
     $('log').scrollTop = $('log').scrollHeight;
     return div;
+  }
+  // An image the agent drew: fetched with the key (an <img> cannot send it),
+  // shown from a blob URL kept for the page's life.
+  const pictures = new Map();
+  function picture(im) {
+    const img = document.createElement('img');
+    img.alt = im.prompt; img.title = im.prompt;
+    const shown = pictures.get(im.id);
+    if (shown) img.src = shown;
+    else fetch('/api/images/' + im.id, { headers: { authorization: 'Bearer ' + key } })
+      .then((res) => (res.ok ? res.blob() : Promise.reject()))
+      .then((blob) => { const url = URL.createObjectURL(blob); pictures.set(im.id, url); img.src = url; })
+      .catch(() => { img.replaceWith(el('span', { className: 'meta', textContent: '(image no longer kept: ' + im.prompt + ')' })); });
+    return img;
   }
   function render() { $('log').replaceChildren(); messages.forEach(bubble); }
 
@@ -424,6 +461,23 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     catch (err) { $('switch-note').textContent = err.message; }
   }
 
+  // NOTES: each list with its open to-dos first; tick one off, or remove it.
+  async function loadNotes() {
+    const { notes } = await api('/api/notes');
+    const lists = new Map();
+    for (const n of notes) { if (!lists.has(n.list)) lists.set(n.list, []); lists.get(n.list).push(n); }
+    $('list-names').replaceChildren(...[...lists.keys()].map((n) => new Option(n)));
+    $('notes-lists').replaceChildren(...(lists.size ? [...lists.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, items]) => el('section', {},
+      el('h2', { textContent: name + ' · ' + items.filter((n) => !n.done).length + ' open' }),
+      el('ul', { className: 'items' }, ...items.map((n) => {
+        const box = el('input', { type: 'checkbox', checked: n.done, onchange: async () => { await api('/api/notes/' + n.id, { method: 'PATCH', body: JSON.stringify({ done: box.checked }) }); loadNotes(); } });
+        return el('li', { className: n.done ? 'done' : '' },
+          el('label', {}, box, el('span', { textContent: n.text })),
+          el('button', { type: 'button', textContent: 'Remove', onclick: async () => { await api('/api/notes/' + n.id, { method: 'DELETE' }); loadNotes(); } }));
+      })),
+    )) : [el('p', { className: 'hint', textContent: 'No notes yet. Add one here, or ask your agent: “add milk to my groceries”.' })]));
+  }
+
   async function loadActivity() {
     const { activity } = await api('/api/activity');
     $('activity').replaceChildren(...(activity.length ? activity.map((a) => el('li', { className: a.outcome },
@@ -434,9 +488,10 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 
   function tab(name) {
     for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
-    for (const t of ['knowledge', 'models', 'access']) $('tab-' + t).hidden = t !== name;
+    for (const t of ['knowledge', 'notes', 'models', 'access']) $('tab-' + t).hidden = t !== name;
     store.set('agent.tab', name);
     if (name === 'access') loadActivity().catch(() => {});
+    if (name === 'notes') loadNotes().catch(() => {});
   }
   function openSettings(name) { tab(name || store.get('agent.tab', 'knowledge')); if (!$('settings').open) $('settings').showModal(); }
 
@@ -465,6 +520,13 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
   $('switch').onclick = () => setPaused(!paused);
   $('resume-banner').onclick = () => setPaused(false);
   $('lock-now').onclick = () => lock('Locked. Enter the access key to use this agent here again.');
+  $('note-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { text: $('note-text').value.trim() };
+    if ($('note-list').value.trim()) body.list = $('note-list').value.trim();
+    try { await api('/api/notes', { method: 'POST', body: JSON.stringify(body) }); $('note-form').reset(); $('note-note').textContent = ''; loadNotes(); }
+    catch (err) { $('note-note').textContent = err.message; }
+  };
   $('add-memory').onsubmit = async (e) => {
     e.preventDefault();
     const body = { text: $('memory-text').value.trim() };
@@ -502,15 +564,17 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     const pending = bubble({ role: 'assistant', content: '…' });
     $('send').disabled = true;
     try {
-      const history = messages.filter((m) => !m.error).slice(-40).map(({ role, content }) => ({ role, content }));
+      // What a model is sent: the words only (an image is shown, not resent).
+      const history = messages.filter((m) => !m.error && m.content).slice(-40).map(({ role, content }) => ({ role, content }));
       const reply = await api('/api/chat', { method: 'POST', body: JSON.stringify({ model: $('model').value, messages: history }) });
       const label = (models.find((m) => m.key === reply.model) || {}).label || reply.model;
       // A secret in what was typed never reached the model; keep the redacted
       // words here too, so this browser does not hold it either.
       if (reply.said) { messages[messages.length - 1].content = reply.said; render(); }
       const kept = reply.redacted ? ' · kept ' + reply.redacted + (reply.redacted === 1 ? ' secret' : ' secrets') + ' out' : '';
-      messages.push({ role: 'assistant', content: reply.text || '(no answer)', meta: label + (reply.tools.length ? ' · used ' + reply.tools.join(', ') : '') + kept });
+      messages.push({ role: 'assistant', content: reply.text || (reply.images ? '' : '(no answer)'), images: reply.images, meta: label + (reply.tools.length ? ' · used ' + reply.tools.join(', ') : '') + kept });
       if (reply.tools.some((t) => t === 'remember' || t === 'forget')) loadMemories();
+      if (reply.tools.some((t) => /Note/.test(t)) && !$('tab-notes').hidden) loadNotes();
     } catch (err) {
       messages.push({ role: 'assistant', content: err.message, error: true });
     } finally {

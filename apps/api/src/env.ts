@@ -33,9 +33,11 @@ export type Env = {
   // https://<owner>-<name>.hf.space; the e2e points both at a local stand-in.
   HF_ROUTER_URL?: string
   HF_SPACES_URL?: string
-  // TEST ONLY — where the news feed and web search are (web.ts).
+  // TEST ONLY — where the news feed and web search are (web.ts), and the open
+  // services the agent looks things up in (lookup.ts).
   NEWS_URL?: string
   WEB_SEARCH_URL?: string
+  LOOKUP_URL?: string
 }
 
 /** The agent is unlocked once its owner has stored an access key. */

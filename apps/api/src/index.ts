@@ -4,7 +4,7 @@ import { runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
 import { API_NAME } from './identity'
-import { memoryOf, MAX_MEMORY_CHARS, MAX_SPACE_CHARS, type MemoryStore } from './memory'
+import { memoryOf, MAX_MEMORY_CHARS, MAX_NOTE_CHARS, MAX_SPACE_CHARS, type MemoryStore, type NoteChange } from './memory'
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
 import { hasSecret } from './secrets'
@@ -150,6 +150,53 @@ app.delete('/api/memories/:id', async (c) => {
   return (await c.var.memory.forget(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
+// NOTES AND TO-DOS: the owner's lists, which the page shows and edits as the
+// agent does — a note that looks like a secret is refused here too.
+const INVALID_NOTE = { ok: false, error: 'invalid_note', message: `a note of 1-${MAX_NOTE_CHARS} characters, on a list of 1-${MAX_SPACE_CHARS}` }
+const noteId = (raw: string) => {
+  const id = Number(raw)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+app.get('/api/notes', async (c) => c.json({ ok: true, notes: await c.var.memory.listNotes() }))
+
+app.post('/api/notes', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { text?: unknown; list?: unknown } | null
+  const text = typeof body?.text === 'string' ? body.text.trim() : ''
+  const list = body?.list === undefined ? undefined : typeof body.list === 'string' ? body.list.trim() : null
+  if (!text || text.length > MAX_NOTE_CHARS || list === null || (list !== undefined && list.length > MAX_SPACE_CHARS)) return c.json(INVALID_NOTE, 400)
+  if (hasSecret(text) || hasSecret(list ?? '')) return c.json(LOOKS_LIKE_SECRET, 400)
+  return c.json({ ok: true, note: await c.var.memory.addNote(text, list || undefined) }, 201)
+})
+
+app.patch('/api/notes/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  if (!id) return c.json({ ok: false, error: 'not_found' }, 404)
+  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+  const change: NoteChange = {}
+  if (typeof body?.done === 'boolean') change.done = body.done
+  if (typeof body?.text === 'string' && body.text.trim() && body.text.length <= MAX_NOTE_CHARS) change.text = body.text
+  if (typeof body?.list === 'string' && body.list.trim() && body.list.length <= MAX_SPACE_CHARS) change.list = body.list
+  if (Object.keys(change).length === 0) return c.json(INVALID_NOTE, 400)
+  if (hasSecret(`${change.text ?? ''} ${change.list ?? ''}`)) return c.json(LOOKS_LIKE_SECRET, 400)
+  const note = await c.var.memory.updateNote(id, change)
+  return note ? c.json({ ok: true, note }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+app.delete('/api/notes/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  return id && (await c.var.memory.deleteNote(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+// An image the agent drew, as a JPEG — behind the owner's key like the rest.
+app.get('/api/images/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  const image = id ? await c.var.memory.getImage(id) : null
+  if (!image) return c.json({ ok: false, error: 'not_found' }, 404)
+  const bytes = Uint8Array.from(atob(image.jpegBase64), (ch) => ch.charCodeAt(0))
+  return c.body(bytes, 200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=31536000, immutable' })
+})
+
 // The activity log: every tool the agent called, allowed or blocked.
 app.get('/api/activity', async (c) => c.json({ ok: true, activity: await c.var.memory.listActivity(100) }))
 
@@ -214,7 +261,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: toolNames(env),
-    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', state: '/api/state', activity: '/api/activity', health: '/health' },
+    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images/<id>', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 

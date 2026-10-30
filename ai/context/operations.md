@@ -174,6 +174,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | remove a key from the Worker | `pnpm exec wrangler secret delete <KEY> --env <env>` from `apps/api` — a deploy never deletes one |
 | stop the agent now | pause it in the page (☰ → Access → Pause the agent): chat answers `503` and no model is called, no redeploy; Resume undoes it. If the key may have leaked: store `AGENT_KILL_SWITCH` = `on` and deploy, then rotate the key, set the switch `off` and deploy |
 | turn on web search | store `TAVILY_API_KEY` and deploy; `/health` answers `"webSearch":"connected"` (README, "The news and the web") |
+| add a lookup source | a function in `apps/api/src/lookup.ts` (keyless, answers with a `url`, `{ error }` on failure), its `tool()` in `agent.ts` via `look(…, { fromTheWeb })`, its name in `TOOL_NAMES`, a stand-in route under `/lookup/<service>` in `tests/api/src/helpers.ts`, a test |
 | see what the agent did | ☰ → Access → What it did, or `GET /api/activity`: every tool call and whether a guard blocked it (README, "What keeps it safe") |
 | rotate the access key | store a new `AGENT_ACCESS_KEY` and deploy; every browser holding the old one is asked again |
 | headless credentials | `ORUN_TOKEN` (workspace-scoped) + `GITHUB_TOKEN` |

@@ -17,8 +17,8 @@ describe("GET /health", () => {
       huggingface: "not connected",
       models: { default: "workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai": 2, configured: 0 },
       webSearch: "not connected",
-      tools: ["remember", "recall", "forget", "currentTime", "news", "readPage"],
-      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", state: "/api/state", activity: "/api/activity", health: "/health" },
+      tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "books", "readPage", "generateImage"],
+      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", notes: "/api/notes", images: "/api/images/<id>", state: "/api/state", activity: "/api/activity", health: "/health" },
     });
   });
 
@@ -44,6 +44,9 @@ describe("GET /", () => {
     expect(html).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
     expect(html).toContain('Built with <a href="https://orunbase.com"');
     expect(page('<b>"x"</b>')).toContain("<title>&lt;b&gt;&quot;x&quot;&lt;/b&gt;</title>");
+    // Every element id is unique: the page's script finds them by id.
+    const ids = [...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
   });
 
   it("answers an unknown path with a 404", async () => {
