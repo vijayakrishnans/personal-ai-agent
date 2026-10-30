@@ -180,3 +180,61 @@ describe("generateImage", () => {
     expect((await use(x, "generateImage", { prompt: "a poster saying sk-proj-abcdefghijklmnopqrstuvwxyz123456" })).result.error).toMatch(/blocked/);
   });
 });
+
+describe("the library", () => {
+  const req = (x: ReturnType<typeof env>, method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: auth(), ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, x);
+
+  it("keeps every image drawn, lists them newest first, and deletes one", async () => {
+    const x = toolEnv();
+    await use(x, "generateImage", { prompt: "A lighthouse at dawn" });
+    await use(x, "generateImage", { prompt: "Fishing nets in Fort Kochi" });
+    const { images } = await json(await req(x, "GET", "/api/images"));
+    expect(images.map((i: { id: number; prompt: string; model: string }) => [i.id, i.prompt, i.model])).toEqual([
+      [2, "Fishing nets in Fort Kochi", "@cf/black-forest-labs/flux-1-schnell"],
+      [1, "A lighthouse at dawn", "@cf/black-forest-labs/flux-1-schnell"],
+    ]);
+    expect((await req(x, "DELETE", "/api/images/1")).status).toBe(200);
+    expect((await req(x, "DELETE", "/api/images/1")).status).toBe(404);
+    expect((await json(await req(x, "GET", "/api/images"))).images).toHaveLength(1);
+  });
+
+  it("draws with the image model the owner chose: FLUX.2 through its multipart form, served as the PNG it is", async () => {
+    const x = toolEnv();
+    const chosen = await json(await req(x, "PUT", "/api/state", { imageModel: "@cf/black-forest-labs/flux-2-klein-4b" }));
+    expect(chosen.imageModel).toBe("@cf/black-forest-labs/flux-2-klein-4b");
+    expect((await req(x, "PUT", "/api/state", { imageModel: "@cf/not/a-model" })).status).toBe(400);
+
+    await use(x, "generateImage", { prompt: "A tea estate in Munnar" });
+    expect(x.asked.at(-2)).toMatchObject({ model: "@cf/black-forest-labs/flux-2-klein-4b", system: "A tea estate in Munnar" });
+    const img = await req(x, "GET", "/api/images/1");
+    expect(img.headers.get("content-type")).toBe("image/png");
+    expect((await json(await req(x, "GET", "/api/images"))).images[0].model).toBe("@cf/black-forest-labs/flux-2-klein-4b");
+  });
+
+  it("saves answers whole, lists them newest first, refuses a secret, and deletes one", async () => {
+    const x = toolEnv();
+    const long = "A long answer. ".repeat(100);
+    expect((await req(x, "POST", "/api/saved", { text: long, source: "Kimi K2.6 · Workers AI" })).status).toBe(201);
+    expect((await req(x, "POST", "/api/saved", { text: "Short one." })).status).toBe(201);
+    expect((await req(x, "POST", "/api/saved", { text: "" })).status).toBe(400);
+    expect((await json(await req(x, "POST", "/api/saved", { text: "my password is Hunter2Secret" }))).error).toBe("looks_like_secret");
+    const { saved } = await json(await req(x, "GET", "/api/saved"));
+    expect(saved.map((it: { text: string; source: string }) => [it.text.length, it.source])).toEqual([
+      [10, ""],
+      [long.trim().length, "Kimi K2.6 · Workers AI"],
+    ]);
+    // Saved answers are the owner's library, never put in a prompt.
+    await app.request("/api/chat", say("hello"), x);
+    expect(x.asked.at(-1)?.system).not.toContain("A long answer.");
+    expect((await req(x, "DELETE", `/api/saved/${saved[0].id}`)).status).toBe(200);
+    expect((await json(await req(x, "GET", "/api/saved"))).saved).toHaveLength(1);
+  });
+
+  it("is behind the owner's key like the rest", async () => {
+    const x = toolEnv();
+    for (const [method, path] of [["GET", "/api/images"], ["DELETE", "/api/images/1"], ["GET", "/api/saved"], ["POST", "/api/saved"], ["DELETE", "/api/saved/1"]] as const) {
+      expect((await app.request(path, { method }, x)).status, `${method} ${path}`).toBe(401);
+    }
+  });
+});

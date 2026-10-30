@@ -4,9 +4,10 @@ import { runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
 import { API_NAME } from './identity'
-import { memoryOf, MAX_MEMORY_CHARS, MAX_NOTE_CHARS, MAX_SPACE_CHARS, type MemoryStore, type NoteChange } from './memory'
-import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_MODELS } from './models'
+import { memoryOf, MAX_MEMORY_CHARS, MAX_NOTE_CHARS, MAX_SAVED_CHARS, MAX_SPACE_CHARS, type MemoryStore, type NoteChange } from './memory'
+import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
+import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, imageModel, imageType } from './images'
 import { hasSecret } from './secrets'
 import { page } from './ui'
 import { webSearchConnected } from './web'
@@ -58,10 +59,21 @@ app.use('/api/*', async (c, next) => {
 const models = async (c: AppContext) => catalog(c.env, await c.var.memory.listModels())
 
 app.get('/api/models', async (c) => {
-  return c.json({ default: modelKey('workers-ai', DEFAULT_MODEL), huggingface: huggingfaceConnected(c.env), models: await models(c) })
+  return c.json({
+    default: modelKey('workers-ai', DEFAULT_MODEL),
+    huggingface: huggingfaceConnected(c.env),
+    models: await models(c),
+    images: { models: IMAGE_MODELS, default: DEFAULT_IMAGE_MODEL },
+  })
 })
 
 const AddModel = z.discriminatedUnion('provider', [
+  z.object({
+    provider: z.literal('workers-ai'),
+    id: z.string().regex(WORKERS_AI_ID, 'a Workers AI model id, @cf/owner/name'),
+    label: z.string().trim().min(1).max(80).optional(),
+    tools: z.boolean().default(true),
+  }),
   z.object({
     provider: z.literal('huggingface'),
     id: z.string().regex(HF_MODEL_ID, 'a Hub model id, owner/name, optionally :provider'),
@@ -83,7 +95,9 @@ app.post('/api/models', async (c) => {
   const stored =
     m.provider === 'space'
       ? { provider: m.provider, id: m.id, label: m.label ?? `${m.id} · Space`, tools: false, apiName: m.apiName }
-      : { provider: m.provider, id: m.id, label: m.label ?? `${m.id} · Hugging Face`, tools: m.tools }
+      : m.provider === 'workers-ai'
+        ? { provider: m.provider, id: m.id, label: m.label ?? `${m.id.replace(/^@cf\//, '')} · Workers AI`, tools: m.tools }
+        : { provider: m.provider, id: m.id, label: m.label ?? `${m.id} · Hugging Face`, tools: m.tools }
   try {
     await c.var.memory.addModel(stored)
   } catch (error) {
@@ -95,9 +109,15 @@ app.post('/api/models', async (c) => {
 
 // Only a model added in the page can be removed there: the built-in ones are
 // the code's, and HF_MODELS's are the secret's.
+// A Workers AI id has three segments (@cf/owner/name), the others two.
 app.delete('/api/models/:provider/:owner/:name', async (c) => {
   const { provider, owner, name } = c.req.param()
   const removed = await c.var.memory.removeModel(provider, `${owner}/${name}`)
+  return removed ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+app.delete('/api/models/:provider/:scope/:owner/:name', async (c) => {
+  const { provider, scope, owner, name } = c.req.param()
+  const removed = await c.var.memory.removeModel(provider, `${scope}/${owner}/${name}`)
   return removed ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
@@ -188,26 +208,64 @@ app.delete('/api/notes/:id', async (c) => {
   return id && (await c.var.memory.deleteNote(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
-// An image the agent drew, as a JPEG — behind the owner's key like the rest.
+// THE LIBRARY: the images the agent drew, and what the owner saved — behind
+// the owner's key like the rest.
+app.get('/api/images', async (c) => c.json({ ok: true, images: await c.var.memory.listImages() }))
+
 app.get('/api/images/:id', async (c) => {
   const id = noteId(c.req.param('id'))
   const image = id ? await c.var.memory.getImage(id) : null
   if (!image) return c.json({ ok: false, error: 'not_found' }, 404)
-  const bytes = Uint8Array.from(atob(image.jpegBase64), (ch) => ch.charCodeAt(0))
-  return c.body(bytes, 200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=31536000, immutable' })
+  const bytes = Uint8Array.from(atob(image.base64), (ch) => ch.charCodeAt(0))
+  return c.body(bytes, 200, { 'content-type': imageType(image.base64), 'cache-control': 'private, max-age=31536000, immutable' })
+})
+
+app.delete('/api/images/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  return id && (await c.var.memory.deleteImage(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+app.get('/api/saved', async (c) => c.json({ ok: true, saved: await c.var.memory.listSaved() }))
+
+app.post('/api/saved', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { text?: unknown; source?: unknown } | null
+  const text = typeof body?.text === 'string' ? body.text.trim() : ''
+  if (!text || text.length > MAX_SAVED_CHARS) return c.json({ ok: false, error: 'invalid_saved', message: `1-${MAX_SAVED_CHARS} characters` }, 400)
+  if (hasSecret(text)) return c.json(LOOKS_LIKE_SECRET, 400)
+  const source = typeof body?.source === 'string' ? body.source : ''
+  return c.json({ ok: true, saved: await c.var.memory.saveItem(text, source) }, 201)
+})
+
+app.delete('/api/saved/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  return id && (await c.var.memory.deleteSaved(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
 // The activity log: every tool the agent called, allowed or blocked.
 app.get('/api/activity', async (c) => c.json({ ok: true, activity: await c.var.memory.listActivity(100) }))
 
-// The pause — the owner's kill switch in the page. GET says whether it is on,
-// PUT {paused} flips it.
-app.get('/api/state', async (c) => c.json({ ok: true, paused: await c.var.memory.isPaused() }))
+// The agent's state: the pause (the owner's kill switch in the page) and
+// which model draws its images. GET reads it; PUT {paused?, imageModel?}
+// changes either.
+const state = async (memory: MemoryStore) => ({
+  ok: true,
+  paused: await memory.isPaused(),
+  imageModel: imageModel(await memory.getSetting('imageModel')).id,
+})
+
+app.get('/api/state', async (c) => c.json(await state(c.var.memory)))
 
 app.put('/api/state', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { paused?: unknown } | null
-  if (typeof body?.paused !== 'boolean') return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true} or {"paused": false}' }, 400)
-  return c.json({ ok: true, paused: await c.var.memory.setPaused(body.paused) })
+  const body = (await c.req.json().catch(() => null)) as { paused?: unknown; imageModel?: unknown } | null
+  const paused = body?.paused
+  const image = body?.imageModel
+  const validImage = typeof image === 'string' && IMAGE_MODELS.some((m) => m.id === image)
+  if ((paused !== undefined && typeof paused !== 'boolean') || (image !== undefined && !validImage) || (paused === undefined && image === undefined)) {
+    return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true|false} and/or {"imageModel": one of the image models}' }, 400)
+  }
+  if (typeof paused === 'boolean') await c.var.memory.setPaused(paused)
+  if (validImage) await c.var.memory.setSetting('imageModel', image)
+  return c.json(await state(c.var.memory))
 })
 
 app.post('/api/chat', async (c) => {
@@ -261,7 +319,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: toolNames(env),
-    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images/<id>', state: '/api/state', activity: '/api/activity', health: '/health' },
+    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', saved: '/api/saved', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 

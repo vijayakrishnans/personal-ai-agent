@@ -15,10 +15,10 @@ describe("GET /health", () => {
       access: "not configured",
       killSwitch: "off",
       huggingface: "not connected",
-      models: { default: "workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai": 2, configured: 0 },
+      models: { default: "workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai": 12, configured: 0 },
       webSearch: "not connected",
       tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "books", "readPage", "generateImage"],
-      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", notes: "/api/notes", images: "/api/images/<id>", state: "/api/state", activity: "/api/activity", health: "/health" },
+      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", notes: "/api/notes", images: "/api/images", saved: "/api/saved", state: "/api/state", activity: "/api/activity", health: "/health" },
     });
   });
 
@@ -120,8 +120,9 @@ describe("the kill switch", () => {
       app.request("/api/state", body === undefined ? { headers: auth() } : { method: "PUT", headers: auth(), body: JSON.stringify(body) }, x);
     const chat = () => app.request("/api/chat", { method: "POST", headers: auth(), body: chatBody }, x);
 
-    expect(await json(await state())).toEqual({ ok: true, paused: false });
-    expect(await json(await state({ paused: true }))).toEqual({ ok: true, paused: true });
+    const FLUX1 = "@cf/black-forest-labs/flux-1-schnell";
+    expect(await json(await state())).toEqual({ ok: true, paused: false, imageModel: FLUX1 });
+    expect(await json(await state({ paused: true }))).toEqual({ ok: true, paused: true, imageModel: FLUX1 });
     const refused = await chat();
     expect(refused.status).toBe(503);
     expect((await json(refused)).error).toBe("agent_paused");
@@ -129,9 +130,9 @@ describe("the kill switch", () => {
     expect((await app.request("/api/memories", { headers: auth() }, x)).status).toBe(200);
 
     for (const bad of [{}, { paused: "yes" }, { paused: 1 }]) expect((await state(bad)).status, JSON.stringify(bad)).toBe(400);
-    expect(await json(await state())).toEqual({ ok: true, paused: true });
+    expect(await json(await state())).toEqual({ ok: true, paused: true, imageModel: FLUX1 });
 
-    expect(await json(await state({ paused: false }))).toEqual({ ok: true, paused: false });
+    expect(await json(await state({ paused: false }))).toEqual({ ok: true, paused: false, imageModel: FLUX1 });
     expect((await chat()).status).toBe(200);
     expect(x.asked).toHaveLength(1);
   });

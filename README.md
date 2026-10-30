@@ -47,6 +47,16 @@ unlock it:
 
 Stage is a separate environment with its own key, memory and models.
 
+## Models
+
+The model picker offers Workers AI's chat models that can use the agent's
+tools, with no key: Kimi K2.6 (the default), Kimi K2.7 Code, DeepSeek V4 Pro
+and Flash, GLM 5.3 and 5.3 Flash, Qwen 3.8 27B, Nemotron 3 120B, Gemma 4 26B,
+Llama 4 Scout, Llama 3.3 70B and Mistral Small 3.1. Kimi K2.6 is the one
+proven end to end with every tool. If another model refuses a request, its
+error names it; switch back. To use any other Workers AI model, add its
+`@cf/…` id in Settings (☰) → **Models** → **Add a model**.
+
 ## Add Hugging Face models
 
 Workers AI works with no extra setup. To use Hugging Face as well, create a
@@ -142,10 +152,27 @@ clears it.
   out exact, not guessed.
 - **Currencies.** Today's European Central Bank reference rates (₹ included),
   from Frankfurter. No key.
-- **Pictures.** Ask it to draw something. FLUX.1 [schnell] on Workers AI
-  makes the image, billed to your Cloudflare account like the chat models,
-  with no key. It shows in the chat, and the agent keeps the last 30. A model
-  only ever learns an image's number, never its contents.
+- **Pictures.** Ask it to draw something. FLUX on Workers AI makes the
+  image, billed to your Cloudflare account like the chat models, with no key.
+  Choose the model in Settings (☰) → **Models**: FLUX.1 [schnell] (fastest,
+  the default) or FLUX.2 [klein] 4B, [klein] 9B or [dev] (best quality,
+  slowest). It shows in the chat and goes into your library. A model only
+  ever learns an image's number, never its contents.
+
+## Your library, and keeping what matters
+
+Under every message there are three buttons:
+
+- **Copy** copies its text.
+- **Add to knowledge** opens it as a memory you trim first (500 characters
+  at most), in a space you choose. The agent then knows it in every
+  conversation, and it appears in the knowledge graph.
+- **Save** (under an answer) keeps the whole answer in your library. Saved
+  answers are never put in a prompt; they're yours to reread and copy.
+
+Settings (☰) → **Library** holds every image the agent drew (the newest 200,
+each with its prompt and model, to download or delete) and every answer you
+saved (the newest 500).
 
 ## The news and the web
 
@@ -242,9 +269,11 @@ Two ways to stop the agent, both reversible:
 | `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…]}` → `{"text", "model", "tools"}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
 | `GET /api/notes`, `POST /api/notes` (`{text, list?}`), `PATCH /api/notes/<id>` (`{done?, text?, list?}`), `DELETE /api/notes/<id>` | your notes and to-dos |
-| `GET /api/images/<id>` | an image the agent drew (JPEG) |
+| `GET /api/images/<id>` | an image the agent drew (JPEG or PNG) |
+| `GET /api/images`, `DELETE /api/images/<id>` | the library's images |
+| `GET /api/saved`, `POST /api/saved` (`{text, source?}`), `DELETE /api/saved/<id>` | saved answers |
 | `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
-| `GET /api/state`, `PUT /api/state` (`{paused}`) | the pause: whether the agent is paused, and pausing or resuming it |
+| `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?}`) | the pause, and which model draws images |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
 | `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |
