@@ -47,6 +47,16 @@ unlock it:
 
 Stage is a separate environment with its own key, memory and models.
 
+## Models
+
+The model picker offers Workers AI's chat models that can use the agent's
+tools, with no key: Kimi K2.6 (the default), Kimi K2.7 Code, DeepSeek V4 Pro
+and Flash, GLM 5.3 and 5.3 Flash, Qwen 3.8 27B, Nemotron 3 120B, Gemma 4 26B,
+Llama 4 Scout, Llama 3.3 70B and Mistral Small 3.1. Kimi K2.6 is the one
+proven end to end with every tool. If another model refuses a request, its
+error names it; switch back. To use any other Workers AI model, add its
+`@cf/…` id in Settings (☰) → **Models** → **Add a model**.
+
 ## Add Hugging Face models
 
 Workers AI works with no extra setup. To use Hugging Face as well, create a
@@ -109,10 +119,13 @@ and a sleeping Space wakes on the first call, which can take a while.
 | `wikipedia` | an article's summary and link (any language) |
 | `dictionary` | what a word means, from Wiktionary |
 | `hackerNews` | tech news: the front page, or stories on a topic |
-| `arxiv` | research papers |
+| `papers` | scholarly papers on a topic from OpenAlex, by relevance, citations or date |
+| `paper` | one paper by DOI: details, abstract, who cites it, and whether it exists at all |
+| `arxiv` | preprints on arXiv |
 | `books` | books on Open Library |
 | `readPage` | reads a web page at a URL as text |
 | `webSearch` | searches the web (only once `TAVILY_API_KEY` is stored) |
+| `useSkill` | loads a skill's instructions when a request matches it |
 | `generateImage` | draws a picture and shows it in the chat |
 
 Every model, tools or not, is told the 30 most recent facts in its system
@@ -142,10 +155,65 @@ clears it.
   out exact, not guessed.
 - **Currencies.** Today's European Central Bank reference rates (₹ included),
   from Frankfurter. No key.
-- **Pictures.** Ask it to draw something. FLUX.1 [schnell] on Workers AI
-  makes the image, billed to your Cloudflare account like the chat models,
-  with no key. It shows in the chat, and the agent keeps the last 30. A model
-  only ever learns an image's number, never its contents.
+- **Pictures.** Ask it to draw something. FLUX on Workers AI makes the
+  image, billed to your Cloudflare account like the chat models, with no key.
+  Choose the model in Settings (☰) → **Models**: FLUX.1 [schnell] (fastest,
+  the default) or FLUX.2 [klein] 4B, [klein] 9B or [dev] (best quality,
+  slowest). It shows in the chat and goes into your library. A model only
+  ever learns an image's number, never its contents.
+
+## Skills
+
+A skill tells the agent how to do one kind of task well. The agent sees each
+skill's name and description, and loads the instructions only when a request
+matches one, so it can know many tasks without carrying them all in every
+prompt. Seven come built in:
+
+| Skill | For |
+|---|---|
+| `research-brief` | a research question answered from papers and sources, with citations |
+| `paper-summary` | one paper summarised from a title, DOI or link |
+| `literature-review` | the key papers on a topic, its themes and its gaps |
+| `citation-check` | whether references exist and match, before you trust or cite them |
+| `daily-briefing` | weather, headlines and open to-dos |
+| `trip-planner` | weather, places, local-currency costs and a checklist |
+| `decision-helper` | options scored against what matters to you |
+
+Settings (☰) → **Skills** shows them all. Write your own there, or edit a
+built-in and save it to make it yours; **Reset to built-in** brings the
+original back.
+
+## Research
+
+`papers` and `paper` read [OpenAlex](https://openalex.org), an open index of
+some 250 million papers, books and datasets. Searches match titles and
+abstracts. `paper` looks a work up by DOI, and says plainly when there is no
+such work, which is how `citation-check` catches invented references. The
+agent cites only works a tool returned.
+
+OpenAlex needs no key, but keyless calls share a small daily budget per IP
+address, and on Workers that's shared with everyone else. For the agent's own
+budget, get a free key at [openalex.org/settings/api](https://openalex.org/settings/api)
+and store it, then redeploy:
+
+```bash
+orun secrets set OPENALEX_API_KEY --org <ws> --env prod
+```
+
+## Your library, and keeping what matters
+
+Under every message there are three buttons:
+
+- **Copy** copies its text.
+- **Add to knowledge** opens it as a memory you trim first (500 characters
+  at most), in a space you choose. The agent then knows it in every
+  conversation, and it appears in the knowledge graph.
+- **Save** (under an answer) keeps the whole answer in your library. Saved
+  answers are never put in a prompt; they're yours to reread and copy.
+
+Settings (☰) → **Library** holds every image the agent drew (the newest 200,
+each with its prompt and model, to download or delete) and every answer you
+saved (the newest 500).
 
 ## The news and the web
 
@@ -242,9 +310,12 @@ Two ways to stop the agent, both reversible:
 | `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…]}` → `{"text", "model", "tools"}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
 | `GET /api/notes`, `POST /api/notes` (`{text, list?}`), `PATCH /api/notes/<id>` (`{done?, text?, list?}`), `DELETE /api/notes/<id>` | your notes and to-dos |
-| `GET /api/images/<id>` | an image the agent drew (JPEG) |
+| `GET /api/images/<id>` | an image the agent drew (JPEG or PNG) |
+| `GET /api/images`, `DELETE /api/images/<id>` | the library's images |
+| `GET /api/saved`, `POST /api/saved` (`{text, source?}`), `DELETE /api/saved/<id>` | saved answers |
+| `GET /api/skills`, `PUT /api/skills/<name>` (`{description, instructions}`), `DELETE /api/skills/<name>` | the skills, built in and your own |
 | `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
-| `GET /api/state`, `PUT /api/state` (`{paused}`) | the pause: whether the agent is paused, and pausing or resuming it |
+| `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?}`) | the pause, and which model draws images |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
 | `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |

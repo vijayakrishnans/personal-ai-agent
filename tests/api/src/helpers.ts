@@ -95,13 +95,23 @@ export function answer(messages: { role: string; content: unknown }[], tools: st
 /** A JPEG's first bytes, base64: what the image stand-in draws. */
 export const JPEG_BASE64 = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46));
 
+export const PNG_BASE64 = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a));
+
 export function aiStandIn() {
   const asked: Asked[] = [];
   const AI = {
-    async run(model: string, inputs: { prompt?: string; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[] }) {
+    async run(
+      model: string,
+      inputs: { prompt?: string; multipart?: { body: ReadableStream; contentType: string }; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[] },
+    ) {
       if (model.includes("flux")) {
-        asked.push({ model, tools: [], roles: [], system: inputs.prompt ?? "" });
-        return inputs.prompt?.includes("fail") ? {} : { image: JPEG_BASE64 };
+        // FLUX.2 takes a multipart form, FLUX.1 JSON; FLUX.2 answers with a PNG here.
+        const prompt = inputs.multipart
+          ? String((await new Response(inputs.multipart.body, { headers: { "content-type": inputs.multipart.contentType } }).formData()).get("prompt"))
+          : (inputs.prompt ?? "");
+        asked.push({ model, tools: [], roles: [], system: prompt });
+        if (prompt.includes("fail")) return {};
+        return { image: inputs.multipart ? PNG_BASE64 : JPEG_BASE64 };
       }
       const tools = (inputs.tools ?? []).map((t) => t.function?.name ?? "").filter(Boolean);
       return { choices: [answer(inputs.messages ?? [], tools, model, asked)], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } };
@@ -223,6 +233,18 @@ export async function webStandIn() {
       return send(200, "application/atom+xml", `<feed><entry><id>http://arxiv.org/abs/2610.1v1</id><title>A Paper\n  on RAG</title><published>2026-10-29T00:00:00Z</published><summary>We study it.</summary><author><name>A. Author</name></author><link href="https://arxiv.org/abs/2610.1v1" rel="alternate" type="text/html"/></entry></feed>`);
     if (url.pathname === "/lookup/books/search.json")
       return lookup({ docs: [{ key: "/works/OL1W", title: "The God of Small Things", author_name: ["Arundhati Roy"], first_publish_year: 1997, number_of_pages_median: 357, subject: ["Fiction", "award:booker"] }] });
+    // OpenAlex: a search, one work by DOI or id, and the works citing it.
+    const W = (id: string, title: string, year: number, cites: number) => ({
+      id: `https://openalex.org/${id}`, doi: `https://doi.org/10.1234/${id.toLowerCase()}`, title, publication_year: year, cited_by_count: cites,
+      authorships: [{ author: { display_name: "P. Lewis" } }], primary_location: { source: { display_name: "NeurIPS" } },
+      open_access: { oa_url: `https://arxiv.org/pdf/${id}` }, abstract_inverted_index: { "Large": [0], "models": [1], "retrieve.": [2] },
+    });
+    if (url.pathname === "/lookup/openalex/works") {
+      if (url.searchParams.get("filter")?.startsWith("cites:")) return lookup({ results: [W("W2", "A paper citing it", 2023, 50)] });
+      return lookup({ meta: { count: 1 }, results: [W("W1", `RAG (${url.searchParams.get("sort") ?? "relevance"})`, 2020, 3046)] });
+    }
+    if (url.pathname === "/lookup/openalex/works/doi%3A10.1234%2Fw1" || url.pathname === "/lookup/openalex/works/W1") return lookup({ ...W("W1", "RAG", 2020, 3046), referenced_works_count: 60, type: "article" });
+    if (url.pathname.startsWith("/lookup/openalex/works/")) return send(404, "application/json", "{}");
     if (url.pathname === "/big") return send(200, "text/plain", "x".repeat(50_000));
     if (url.pathname === "/file.pdf") return send(200, "application/pdf", "%PDF-1.4");
     if (url.pathname === "/search") {

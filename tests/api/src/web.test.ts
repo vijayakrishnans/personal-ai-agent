@@ -90,7 +90,7 @@ describe("webSearch", () => {
     const x = webEnv({ TAVILY_API_KEY: TAVILY_KEY });
     const health = await (await app.request("/health", {}, x)).text();
     expect(health).not.toContain(TAVILY_KEY);
-    expect(JSON.parse(health)).toMatchObject({ webSearch: "connected", tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "books", "readPage", "webSearch", "generateImage"] });
+    expect(JSON.parse(health)).toMatchObject({ webSearch: "connected", tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "papers", "paper", "books", "readPage", "webSearch", "useSkill", "generateImage"] });
   });
 
   it("searches the web or the news with the owner's key, sent to the search API alone", async () => {

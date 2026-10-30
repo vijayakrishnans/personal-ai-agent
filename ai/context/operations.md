@@ -136,6 +136,8 @@ Caveats that matter:
   - `TAVILY_API_KEY` — web search: with it the agent is offered
     `webSearch` (Tavily); without it, `news` (Google News RSS) and
     `readPage` still work, keyless;
+  - `OPENALEX_API_KEY` — optional: the `papers` and `paper` tools' own
+    OpenAlex budget; without it they share the keyless one;
   - `AGENT_KILL_SWITCH` — the hard kill switch: `on` (true, 1, yes) and every
     `/api` route answers `503` to everyone, the owner too, until it is set
     `off` and the Worker redeployed.
@@ -163,7 +165,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | unlock the agent | store `AGENT_ACCESS_KEY` for the environment, deploy it, open `<worker URL>/` and enter the key (README, "Unlock the agent") |
 | add Hugging Face models | store `HF_TOKEN` and deploy, then add models in the page's settings (☰ → Models) — or list them in `HF_MODELS` and deploy (README, "Add Hugging Face models") |
 | add a tool | `tool()` in `apps/api/src/agent.ts`, its name in `TOOL_NAMES`, a test in `tests/api`, merge |
-| change the built-in models | `WORKERS_AI_MODELS` (and `DEFAULT_MODEL`) in `apps/api/src/models.ts` — a model that calls tools |
+| change the built-in models | `WORKERS_AI_MODELS` (and `DEFAULT_MODEL`) in `apps/api/src/models.ts` — a model that takes the Chat Completions input with `tools`. Any other `@cf/…` model the owner adds in ☰ → Models; image models are `IMAGE_MODELS` in `apps/api/src/images.ts` |
 | change the memory schema | a new migration tag in `wrangler.jsonc` and `CREATE … IF NOT EXISTS` / `ALTER` in `AgentMemory`'s constructor; never edit `v1` |
 | deploy a change | merge to `main`; watch the run; failed lanes → `gh run rerun --failed` |
 | deploy by hand | Orunbase's Deploy button, or `gh workflow run ci.yml --ref main -f environment=<env> [-f component=<a,b>]` — the named components (blank: every one) run in that environment as a merge runs them; started off `main` it is refused |
@@ -175,6 +177,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | stop the agent now | pause it in the page (☰ → Access → Pause the agent): chat answers `503` and no model is called, no redeploy; Resume undoes it. If the key may have leaked: store `AGENT_KILL_SWITCH` = `on` and deploy, then rotate the key, set the switch `off` and deploy |
 | turn on web search | store `TAVILY_API_KEY` and deploy; `/health` answers `"webSearch":"connected"` (README, "The news and the web") |
 | add a lookup source | a function in `apps/api/src/lookup.ts` (keyless, answers with a `url`, `{ error }` on failure), its `tool()` in `agent.ts` via `look(…, { fromTheWeb })`, its name in `TOOL_NAMES`, a stand-in route under `/lookup/<service>` in `tests/api/src/helpers.ts`, a test |
+| add a built-in skill | an entry in `BUILT_IN_SKILLS` (`apps/api/src/skills.ts`): a name, when to use it, and steps naming the tools; the owner's own are written in ☰ → Skills |
 | see what the agent did | ☰ → Access → What it did, or `GET /api/activity`: every tool call and whether a guard blocked it (README, "What keeps it safe") |
 | rotate the access key | store a new `AGENT_ACCESS_KEY` and deploy; every browser holding the old one is asked again |
 | headless credentials | `ORUN_TOKEN` (workspace-scoped) + `GITHUB_TOKEN` |

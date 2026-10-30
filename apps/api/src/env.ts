@@ -28,6 +28,9 @@ export type Env = {
   // Web search (Tavily). Stored, the agent can search the web; unset, it
   // still reads the news and any page it is given (web.ts).
   TAVILY_API_KEY?: string
+  // OpenAlex (research.ts): optional. Without it, the papers tools share
+  // OpenAlex's small keyless daily budget with every Worker on the same IP.
+  OPENALEX_API_KEY?: string
   // TEST ONLY — where Hugging Face is. Unset, the router is
   // https://router.huggingface.co/v1 and a Space `<owner>/<name>` is
   // https://<owner>-<name>.hf.space; the e2e points both at a local stand-in.

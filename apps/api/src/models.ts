@@ -6,8 +6,10 @@ import type { StoredModel } from './memory'
 
 // THE MODELS THE AGENT OFFERS, in three kinds:
 //
-//   workers-ai   built in, through the Worker's own `AI` binding — no key, so
-//                a fresh deployment answers with nothing but its access key
+//   workers-ai   through the Worker's own `AI` binding — no key, so a fresh
+//                deployment answers with nothing but its access key. A
+//                choice of them is built in; the owner may add any other
+//                `@cf/…` model in the page
 //   huggingface  any model Hugging Face's Inference Providers serve — the
 //                models HuggingChat runs included — through the router's
 //                OpenAI-compatible API, with the owner's HF_TOKEN. An id may
@@ -17,7 +19,8 @@ import type { StoredModel } from './memory'
 //                own Space, a public one, or a private one HF_TOKEN can read
 //
 // The Hugging Face kinds come from the HF_MODELS secret (offered from the
-// start) and from the page (kept in the agent's memory). Nothing else is
+// start) and from the page (kept in the agent's memory), as do added Workers
+// AI models. Nothing else is
 // offered, and /api/chat refuses a model that is not in this list.
 
 export type Provider = 'workers-ai' | 'huggingface' | 'space'
@@ -34,17 +37,29 @@ export type ModelEntry = {
 
 export const DEFAULT_MODEL = '@cf/moonshotai/kimi-k2.6'
 
+// Workers AI's chat models that call tools (they take the Chat Completions
+// input, `tools` included), newest families first. The default is the one
+// proven with the agent's tools; the others are offered as Cloudflare lists
+// them. gpt-oss is not here: it takes the Responses API, not this one.
+const builtIn = (id: string, label: string): ModelEntry => ({ key: `workers-ai:${id}`, provider: 'workers-ai', id, label: `${label} · Workers AI`, tools: true, source: 'built-in' })
+
 export const WORKERS_AI_MODELS: ModelEntry[] = [
-  { key: `workers-ai:${DEFAULT_MODEL}`, provider: 'workers-ai', id: DEFAULT_MODEL, label: 'Kimi K2.6 · Workers AI', tools: true, source: 'built-in' },
-  {
-    key: 'workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-    provider: 'workers-ai',
-    id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-    label: 'Llama 3.3 70B · Workers AI',
-    tools: true,
-    source: 'built-in',
-  },
+  builtIn(DEFAULT_MODEL, 'Kimi K2.6'),
+  builtIn('@cf/moonshotai/kimi-k2.7-code', 'Kimi K2.7 Code'),
+  builtIn('@cf/deepseek-ai/deepseek-v4-pro-0813', 'DeepSeek V4 Pro'),
+  builtIn('@cf/deepseek-ai/deepseek-v4-flash-0731', 'DeepSeek V4 Flash'),
+  builtIn('@cf/zai-org/glm-5.3', 'GLM 5.3'),
+  builtIn('@cf/zai-org/glm-5.3-flash', 'GLM 5.3 Flash'),
+  builtIn('@cf/qwen/qwen3.8-27b', 'Qwen 3.8 27B'),
+  builtIn('@cf/nvidia/nemotron-3-120b-a12b', 'Nemotron 3 120B'),
+  builtIn('@cf/google/gemma-4-26b-a4b-it', 'Gemma 4 26B'),
+  builtIn('@cf/meta/llama-4-scout-17b-16e-instruct', 'Llama 4 Scout'),
+  builtIn('@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'Llama 3.3 70B'),
+  builtIn('@cf/mistralai/mistral-small-3.1-24b-instruct', 'Mistral Small 3.1'),
 ]
+
+// Any other Workers AI model the owner adds in the page, by its id.
+export const WORKERS_AI_ID = /^@cf\/[a-z0-9][\w.-]{0,63}\/[\w.-]{1,96}$/
 
 export const HF_ROUTER_URL = 'https://router.huggingface.co/v1'
 
