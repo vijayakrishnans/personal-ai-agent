@@ -202,12 +202,47 @@ const SCRIPT = String.raw`
     save.onclick = () => openSave(m, answer ? questionFor(i) : '');
     bar.append(copy, know, save);
     if (answer) {
+      const down = el('button', { type: 'button', textContent: 'Download', title: 'Download the question and this answer as a Markdown file' });
+      down.onclick = () => { downloadText('answer-' + stamp() + '.md', markdownOf([{ role: 'user', content: questionFor(i) }, m])); flash(down, 'Downloaded'); };
       const shot = el('button', { type: 'button', textContent: 'Screenshot', title: 'Save the question and this answer as a picture' });
       shot.onclick = () => screenshot(m, questionFor(i)).then(() => flash(shot, 'Saved'), (err) => flash(shot, String(err.message || err).slice(0, 40)));
-      bar.append(shot);
+      bar.append(down, shot);
     }
     return bar;
   }
+
+  // DOWNLOAD as Markdown: one answer with its question, or the whole chat.
+  // Pictures, music and maps are listed by what they are, with map links.
+  function stamp() { return new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-'); }
+  function downloadText(name, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+    el('a', { href: url, download: name }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  function markdownOf(list) {
+    const out = [];
+    for (const m of list) {
+      if (m.error || !(m.content || (m.images || []).length || (m.tracks || []).length || (m.maps || []).length)) continue;
+      out.push(m.role === 'user' ? '## You asked' : '## ' + (m.meta ? m.meta.split(' · ')[0] : 'Answer'));
+      if (m.content) out.push(m.content.trim());
+      for (const im of m.images || []) out.push('*Picture:* ' + im.prompt);
+      for (const t of m.tracks || []) out.push('*Music:* ' + t.style + (t.seconds ? ' (' + t.seconds + ' s)' : ''));
+      for (const v of m.maps || []) {
+        const lines = ['*Map:* ' + v.title];
+        for (const p of v.places || []) lines.push('- [' + p.name + '](' + p.url + ')');
+        if (v.route) lines.push('- ' + v.route.km + ' km, ' + duration(v.route.minutes) + ' by ' + v.route.mode + ': [directions](' + v.route.directions + ')');
+        out.push(lines.join('\n'));
+      }
+    }
+    return out.join('\n\n') + '\n';
+  }
+  $('download-chat').onclick = () => {
+    if (!messages.length) { toast('Nothing to download yet'); return; }
+    const first = messages.find((m) => m.role === 'user');
+    const title = first ? oneLine(first.content).slice(0, 80) : 'Conversation';
+    downloadText('chat-' + stamp() + '.md', '# ' + title + '\n\n' + markdownOf(messages));
+    toast('Conversation downloaded');
+  };
 
   // ADD TO KNOWLEDGE: a fact, or a question with the answer kept. From a
   // note, the note goes once it is in the knowledge.
@@ -342,7 +377,7 @@ const SCRIPT = String.raw`
     const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
     if (!blob) throw new Error('could not draw it');
     const url = URL.createObjectURL(blob);
-    el('a', { href: url, download: 'answer-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.png' }).click();
+    el('a', { href: url, download: 'answer-' + stamp() + '.png' }).click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); toast('Screenshot downloaded and copied'); } catch { toast('Screenshot downloaded'); }
   }
@@ -1201,6 +1236,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 <header>
   <h1>${title}</h1>
   <select id="model" aria-label="Model"></select>
+  <button id="download-chat" type="button" title="Download this conversation as a Markdown file">Download chat</button>
   <button id="clear" type="button" title="Start a new conversation">New chat</button>
   <button id="menu" type="button" title="Settings: knowledge, notes, library, models, access" aria-label="Settings">☰</button>
 </header>
