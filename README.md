@@ -63,8 +63,8 @@ same token.
 
 Then add models in either of two ways:
 
-- **In the page.** Open the side panel (☰) and use **Add a Hugging Face
-  model**:
+- **In the page.** Open the settings (☰), go to **Models** and use **Add a
+  Hugging Face model**:
   - **Inference Providers model**: a Hub id such as `openai/gpt-oss-120b`,
     `meta-llama/Llama-3.3-70B-Instruct` or `Qwen/Qwen3-Coder-480B-A35B-Instruct`.
     These are the models HuggingChat lists. Add `:fastest`, `:cheapest` or a
@@ -97,17 +97,142 @@ and a sleeping Space wakes on the first call, which can take a while.
 
 | Tool | What it does |
 |---|---|
-| `remember` | saves one short fact about you |
-| `recall` | searches what it remembers |
+| `remember` | saves one short fact about you, in a space such as Work or Health |
+| `recall` | searches what it remembers, by words in a fact or its space |
 | `forget` | deletes a fact by its number |
+| `addNote`, `listNotes`, `updateNote`, `deleteNote` | your notes and to-do lists |
 | `currentTime` | the date and time in UTC |
+| `calculate` | exact arithmetic, percentages included |
+| `exchangeRate` | converts currencies at the European Central Bank's daily rates |
+| `weather` | the weather now and for up to 7 days, for a place by name |
+| `news` | the latest headlines: top stories for a country, or news on a topic |
+| `wikipedia` | an article's summary and link (any language) |
+| `dictionary` | what a word means, from Wiktionary |
+| `hackerNews` | tech news: the front page, or stories on a topic |
+| `arxiv` | research papers |
+| `books` | books on Open Library |
+| `readPage` | reads a web page at a URL as text |
+| `webSearch` | searches the web (only once `TAVILY_API_KEY` is stored) |
+| `generateImage` | draws a picture and shows it in the chat |
 
 Every model, tools or not, is told the 30 most recent facts in its system
 prompt. Only a model that calls tools can save new ones. Spaces see your
-message alone. The side panel lists every fact and lets you delete it. The
-store keeps the newest 500. **The conversation itself stays in your browser**
+message alone. The store keeps the newest 500.
+
+Every fact is filed under a **space**, a topic the agent picks when it
+remembers (it reuses one that fits) and `General` when none is named. The
+sidebar lists them by space and lets you delete one; its **‹ Collapse** at
+the bottom folds it away. Settings (☰) → **Knowledge** draws them as a graph:
+you in the centre, each space a hub, each fact around its hub. Click a fact to
+move it to another space or remove it, click a space to rename it, or add a
+fact yourself. **The conversation itself stays in your browser**
 (localStorage), and the Worker stores nothing of what was said. **New chat**
 clears it.
+
+## Notes, numbers and pictures
+
+- **Notes and to-dos.** Ask it to "add cardamom to my groceries" or to
+  "remind me to renew my passport". It keeps lists such as Groceries, To do
+  and Ideas, and ticks items off when you say so. Settings (☰) → **Notes**
+  shows every list: tick items off, remove them or add one yourself. Facts
+  about you still go in its memory; notes are things to act on.
+- **Calculator.** Every sum is worked out by a small parser of its own, never
+  by running code: `+ - * / ^`, parentheses, `18% of 2500`, `2500 + 18%`,
+  `sqrt`, `round`, `min`, `max`, `log`, `pi`. So a bill split or an EMI comes
+  out exact, not guessed.
+- **Currencies.** Today's European Central Bank reference rates (₹ included),
+  from Frankfurter. No key.
+- **Pictures.** Ask it to draw something. FLUX.1 [schnell] on Workers AI
+  makes the image, billed to your Cloudflare account like the chat models,
+  with no key. It shows in the chat, and the agent keeps the last 30. A model
+  only ever learns an image's number, never its contents.
+
+## The news and the web
+
+The agent can look things up when you ask about something current. Nothing in
+the page changes. A reply that used the web names the tool in its footnote,
+such as *used news*, and says where the information came from.
+
+- **News** works from the first deploy, with no key. It reads Google News'
+  feed: the top stories for a country (the agent uses yours if it knows it),
+  or the news on any topic. The feed is for personal, non-commercial reading.
+- **Weather** (Open-Meteo), **Wikipedia**, **Wiktionary**, **Hacker News**,
+  **arXiv** and **Open Library** all work from the first deploy, with no key.
+  Every answer carries its link, so the agent can say where it found it.
+- **Reading a page** works from the first deploy too. Give it a link, or let
+  it follow one it found. Pages are read as plain text and cut at 12,000
+  characters. Pages that need JavaScript to show their text, PDFs and Google
+  News' own article links cannot be read.
+- **Web search** needs a [Tavily](https://tavily.com) API key. Store it, then
+  redeploy:
+
+  ```bash
+  orun secrets set TAVILY_API_KEY --org <ws> --env prod
+  ```
+
+  `/health` then reports `"webSearch":"connected"`. The key is only ever sent
+  to Tavily.
+
+Only models that call tools can use the web: the built-in Workers AI models,
+and Hugging Face models with **Let it use the agent's tools** on. Whatever a
+page says is treated as information, never as instructions: the agent is told
+not to follow directions found on the web, or to remember or forget anything
+because a page said to.
+
+## What keeps it safe
+
+Rules in a prompt can be talked around, so the agent's guards are in code.
+They hold whatever a model is told, by you or by a web page:
+
+- **It never holds a secret.** Before any model sees your message, anything
+  that looks like a secret is replaced with a marker such as
+  `[password removed]`. That covers passwords and PINs ("my password is …"),
+  API keys and tokens (OpenAI, Anthropic, Hugging Face, GitHub, AWS, Google,
+  Slack, Stripe and others), private keys, seed phrases, card numbers,
+  Aadhaar and PAN numbers, and long random strings. The page keeps the
+  redacted words too, so your browser doesn't store the secret. Its reply
+  says *kept 1 secret out*. A memory that looks like a secret is refused,
+  whether the agent or you add it.
+- **Nothing leaves except what you or a search put there.** `readPage` opens
+  only a link you wrote, a page on a site you named (with no query string,
+  which could carry data), or a link a news or search result gave it. A link
+  or search that carries a secret is refused. So a page cannot trick it into
+  sending what it knows to someone else's server.
+- **The web can't rewrite its memory.** Once the agent has read the news or a
+  page in a turn, `remember` and `forget` are refused for the rest of that
+  turn. Say it again in your own words and it will save it.
+- **It works for you.** Its prompt forbids threatening, pressuring or
+  bargaining with you, using what it knows against you, or asking for
+  passwords and ID numbers. It can't send email or messages at all. Its
+  only way out is the web, which the guards above control.
+- **You can see what it did.** ☰ → **Access** → **What it did** lists every
+  tool call, newest first, with blocked ones marked. No secret is written
+  there.
+
+Detection is pattern-based. A password that looks like an ordinary word,
+typed with no hint ("sunshine"), can't be recognised, so keep passwords in a
+password manager, not in the chat.
+
+## Kill switch
+
+Two ways to stop the agent, both reversible:
+
+- **Pause** (everyday). In the page, open ☰ → **Access** → **Pause the
+  agent**. It takes effect at once, with no redeploy. Every chat is refused
+  with `503` before any model is called, so nothing is spent, and a banner
+  says so. What it remembers and its models stay readable. **Resume** turns it
+  back on. The pause is kept in the agent's Durable Object, so it holds for
+  every browser.
+- **Hard off** (if the key may have leaked). Store `AGENT_KILL_SWITCH` = `on`
+  for the environment and redeploy:
+
+  ```bash
+  orun secrets set AGENT_KILL_SWITCH --org <ws> --env prod   # value: on
+  ```
+
+  Every `/api` route then answers `503` to everyone, the right key included,
+  and `/health` reports `"killSwitch":"on"`. To turn it back on, set it to
+  `off` and redeploy. Then rotate `AGENT_ACCESS_KEY` if it leaked.
 
 ## Routes
 
@@ -116,12 +241,18 @@ clears it.
 | `GET /` | the agent's page: chat, model picker, added models, memories |
 | `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…]}` → `{"text", "model", "tools"}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
-| `GET /api/memories`, `POST /api/memories`, `DELETE /api/memories/<id>` | what it remembers |
-| `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"huggingface":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
+| `GET /api/notes`, `POST /api/notes` (`{text, list?}`), `PATCH /api/notes/<id>` (`{done?, text?, list?}`), `DELETE /api/notes/<id>` | your notes and to-dos |
+| `GET /api/images/<id>` | an image the agent drew (JPEG) |
+| `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
+| `GET /api/state`, `PUT /api/state` (`{paused}`) | the pause: whether the agent is paused, and pausing or resuming it |
+| `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
+| `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |
 
 Every `/api` route needs `Authorization: Bearer <AGENT_ACCESS_KEY>`. Without
-a key stored it answers `503`; with a missing or wrong key, `401`.
+a key stored it answers `503`; with a missing or wrong key, `401`. With
+`AGENT_KILL_SWITCH` on it answers `503` to everyone; paused, `POST /api/chat`
+answers `503`.
 
 ## What is here
 

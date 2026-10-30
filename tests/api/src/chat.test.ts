@@ -22,9 +22,9 @@ describe("POST /api/chat — Workers AI", () => {
     const x = env({ AGENT_ACCESS_KEY: KEY });
     const res = await app.request("/api/chat", chat(undefined, "hi", "Echo: hi", "how are you"), x);
     expect(res.status).toBe(200);
-    expect(await json(res)).toEqual({ ok: true, text: "Echo: how are you", model: "workers-ai:@cf/moonshotai/kimi-k2.6", tools: [] });
+    expect(await json(res)).toEqual({ ok: true, text: "Echo: how are you", model: "workers-ai:@cf/moonshotai/kimi-k2.6", tools: [], redacted: 0 });
     expect(x.asked[0]).toMatchObject({ model: "@cf/moonshotai/kimi-k2.6", roles: ["system", "user", "assistant", "user"] });
-    expect(x.asked[0]?.tools).toEqual(["remember", "recall", "forget", "currentTime"]);
+    expect(x.asked[0]?.tools).toEqual(["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "books", "readPage", "generateImage"]);
     expect(x.asked[0]?.system).toContain(`You are ${API_NAME},`);
   });
 
@@ -37,7 +37,16 @@ describe("POST /api/chat — Workers AI", () => {
     expect((await x.memory.listMemories()).map((m) => m.text)).toEqual(["Prefers tea to coffee."]);
     await app.request("/api/chat", chat("workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast", "what do I drink?"), x);
     expect(x.asked.at(-1)?.model).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
-    expect(x.asked.at(-1)?.system).toContain("- [1] Prefers tea to coffee.");
+    expect(x.asked.at(-1)?.system).toContain("- [1] (General) Prefers tea to coffee.");
+  });
+
+  it("files what it remembers under the space the model names, and offers it again", async () => {
+    const x = env({ AGENT_ACCESS_KEY: KEY });
+    await app.request("/api/chat", chat(undefined, "remember in Food: Prefers tea to coffee."), x);
+    expect((await x.memory.listMemories()).map((m) => [m.text, m.space])).toEqual([["Prefers tea to coffee.", "Food"]]);
+    await app.request("/api/chat", chat(undefined, "what do I drink?"), x);
+    expect(x.asked.at(-1)?.system).toContain("- [1] (Food) Prefers tea to coffee.");
+    expect(x.asked.at(-1)?.system).toContain("Reuse an existing space when one fits (Food)");
   });
 
   it("refuses a model it does not offer, and a conversation that does not end with the owner", async () => {
@@ -97,7 +106,7 @@ describe("POST /api/chat — Hugging Face", () => {
     await app.request("/api/models", { method: "POST", headers: auth(), body: JSON.stringify({ provider: "space", id: "me/my-chat" }) }, x);
     const n = hf.calls.length;
     const body = await json(await app.request("/api/chat", chat("space:me/my-chat", "first", "ok", "hello space"), x));
-    expect(body).toEqual({ ok: true, text: "me/my-chat says: hello space", model: "space:me/my-chat", tools: [] });
+    expect(body).toEqual({ ok: true, text: "me/my-chat says: hello space", model: "space:me/my-chat", tools: [], redacted: 0 });
     const calls = hf.calls.slice(n);
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /spaces/me/my-chat/gradio_api/call/chat", "GET /spaces/me/my-chat/gradio_api/call/chat/" + calls[1]?.path.split("/").pop()]);
     expect(calls[0]?.body).toEqual({ data: ["hello space"] });

@@ -1,13 +1,15 @@
 import { Hono, type Context } from 'hono'
 import { z } from 'zod'
-import { runAgent, ChatRequest, TOOL_NAMES } from './agent'
+import { runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
-import { accessConfigured, huggingfaceConnected, type Env } from './env'
+import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
 import { API_NAME } from './identity'
-import { memoryOf, MAX_MEMORY_CHARS, type MemoryStore } from './memory'
+import { memoryOf, MAX_MEMORY_CHARS, MAX_NOTE_CHARS, MAX_SPACE_CHARS, type MemoryStore, type NoteChange } from './memory'
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
+import { hasSecret } from './secrets'
 import { page } from './ui'
+import { webSearchConnected } from './web'
 
 export { AgentMemory } from './memory'
 
@@ -21,16 +23,28 @@ const NOT_CONFIGURED = {
   message:
     'This agent is locked until its owner stores AGENT_ACCESS_KEY as this environment’s secret and redeploys (README → Unlock the agent).',
 }
+const KILLED = {
+  ok: false,
+  error: 'agent_disabled',
+  message: 'This agent is switched off: AGENT_KILL_SWITCH is on. Remove that secret (or set it to off) and redeploy to switch it back on.',
+}
+const PAUSED = {
+  ok: false,
+  error: 'agent_paused',
+  message: 'This agent is paused, so it calls no model. Resume it in ☰ → Access.',
+}
 const HF_NOT_CONNECTED = {
   ok: false,
   error: 'huggingface_not_connected',
   message: 'Hugging Face models need HF_TOKEN stored as this environment’s secret, then a redeploy (README → Add Hugging Face models).',
 }
 
-// THE OWNER'S DOOR, before anything under /api does any work: no key stored
-// is a 503 that says so (the agent spends nothing on anyone's behalf), a
-// missing or wrong key a 401.
+// THE OWNER'S DOOR, before anything under /api does any work: the hard kill
+// switch on is a 503 for everyone, the owner too; no key stored is a 503
+// that says so (the agent spends nothing on anyone's behalf), a missing or
+// wrong key a 401.
 app.use('/api/*', async (c, next) => {
+  if (killSwitchOn(c.env)) return c.json(KILLED, 503)
   if (!accessConfigured(c.env)) return c.json(NOT_CONFIGURED, 503)
   const presented = bearer(c.req.header('authorization'))
   if (!presented || !(await keyMatches(presented, c.env.AGENT_ACCESS_KEY as string))) {
@@ -87,17 +101,47 @@ app.delete('/api/models/:provider/:owner/:name', async (c) => {
   return removed ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
+const LOOKS_LIKE_SECRET = {
+  ok: false,
+  error: 'looks_like_secret',
+  message: 'That looks like a password, key, card or ID number, and the agent never keeps one. A password manager is the place for it.',
+}
+const INVALID_SPACE = { ok: false, error: 'invalid_space', message: `a space is a name of 1-${MAX_SPACE_CHARS} characters` }
+
+/** A space as a request sends it: absent is undefined (the default space), a bad one null. */
+function spaceParam(space: unknown): string | undefined | null {
+  if (space === undefined) return undefined
+  if (typeof space !== 'string') return null
+  const clean = space.trim()
+  return clean && clean.length <= MAX_SPACE_CHARS ? clean : null
+}
+
 app.get('/api/memories', async (c) => {
   return c.json({ memories: await c.var.memory.listMemories(100) })
 })
 
 app.post('/api/memories', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { text?: unknown } | null
+  const body = (await c.req.json().catch(() => null)) as { text?: unknown; space?: unknown } | null
   const text = typeof body?.text === 'string' ? body.text.trim() : ''
   if (!text || text.length > MAX_MEMORY_CHARS) {
     return c.json({ ok: false, error: 'invalid_memory', message: `one fact of 1-${MAX_MEMORY_CHARS} characters` }, 400)
   }
-  return c.json({ ok: true, memory: await c.var.memory.remember(text) }, 201)
+  const space = spaceParam(body?.space)
+  if (space === null) return c.json(INVALID_SPACE, 400)
+  if (hasSecret(text) || hasSecret(space ?? '')) return c.json(LOOKS_LIKE_SECRET, 400)
+  return c.json({ ok: true, memory: await c.var.memory.remember(text, space) }, 201)
+})
+
+// Moving a memory to another space — the page's graph does it.
+app.patch('/api/memories/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id < 1) return c.json({ ok: false, error: 'not_found' }, 404)
+  const body = (await c.req.json().catch(() => null)) as { space?: unknown } | null
+  const space = spaceParam(body?.space)
+  if (!space) return c.json(INVALID_SPACE, 400)
+  if (hasSecret(space)) return c.json(LOOKS_LIKE_SECRET, 400)
+  const memory = await c.var.memory.moveMemory(id, space)
+  return memory ? c.json({ ok: true, memory }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
 app.delete('/api/memories/:id', async (c) => {
@@ -106,7 +150,68 @@ app.delete('/api/memories/:id', async (c) => {
   return (await c.var.memory.forget(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
+// NOTES AND TO-DOS: the owner's lists, which the page shows and edits as the
+// agent does — a note that looks like a secret is refused here too.
+const INVALID_NOTE = { ok: false, error: 'invalid_note', message: `a note of 1-${MAX_NOTE_CHARS} characters, on a list of 1-${MAX_SPACE_CHARS}` }
+const noteId = (raw: string) => {
+  const id = Number(raw)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+app.get('/api/notes', async (c) => c.json({ ok: true, notes: await c.var.memory.listNotes() }))
+
+app.post('/api/notes', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { text?: unknown; list?: unknown } | null
+  const text = typeof body?.text === 'string' ? body.text.trim() : ''
+  const list = body?.list === undefined ? undefined : typeof body.list === 'string' ? body.list.trim() : null
+  if (!text || text.length > MAX_NOTE_CHARS || list === null || (list !== undefined && list.length > MAX_SPACE_CHARS)) return c.json(INVALID_NOTE, 400)
+  if (hasSecret(text) || hasSecret(list ?? '')) return c.json(LOOKS_LIKE_SECRET, 400)
+  return c.json({ ok: true, note: await c.var.memory.addNote(text, list || undefined) }, 201)
+})
+
+app.patch('/api/notes/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  if (!id) return c.json({ ok: false, error: 'not_found' }, 404)
+  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+  const change: NoteChange = {}
+  if (typeof body?.done === 'boolean') change.done = body.done
+  if (typeof body?.text === 'string' && body.text.trim() && body.text.length <= MAX_NOTE_CHARS) change.text = body.text
+  if (typeof body?.list === 'string' && body.list.trim() && body.list.length <= MAX_SPACE_CHARS) change.list = body.list
+  if (Object.keys(change).length === 0) return c.json(INVALID_NOTE, 400)
+  if (hasSecret(`${change.text ?? ''} ${change.list ?? ''}`)) return c.json(LOOKS_LIKE_SECRET, 400)
+  const note = await c.var.memory.updateNote(id, change)
+  return note ? c.json({ ok: true, note }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+app.delete('/api/notes/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  return id && (await c.var.memory.deleteNote(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+// An image the agent drew, as a JPEG — behind the owner's key like the rest.
+app.get('/api/images/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  const image = id ? await c.var.memory.getImage(id) : null
+  if (!image) return c.json({ ok: false, error: 'not_found' }, 404)
+  const bytes = Uint8Array.from(atob(image.jpegBase64), (ch) => ch.charCodeAt(0))
+  return c.body(bytes, 200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=31536000, immutable' })
+})
+
+// The activity log: every tool the agent called, allowed or blocked.
+app.get('/api/activity', async (c) => c.json({ ok: true, activity: await c.var.memory.listActivity(100) }))
+
+// The pause — the owner's kill switch in the page. GET says whether it is on,
+// PUT {paused} flips it.
+app.get('/api/state', async (c) => c.json({ ok: true, paused: await c.var.memory.isPaused() }))
+
+app.put('/api/state', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { paused?: unknown } | null
+  if (typeof body?.paused !== 'boolean') return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true} or {"paused": false}' }, 400)
+  return c.json({ ok: true, paused: await c.var.memory.setPaused(body.paused) })
+})
+
 app.post('/api/chat', async (c) => {
+  if (await c.var.memory.isPaused()) return c.json(PAUSED, 503)
   const parsed = ChatRequest.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ ok: false, error: 'invalid_chat', message: parsed.error.issues.map((i) => i.message).join('; ') }, 400)
   const { model = modelKey('workers-ai', DEFAULT_MODEL), messages } = parsed.data
@@ -147,14 +252,16 @@ app.get('/health', (c) => {
     name: API_NAME,
     environment: env?.ENVIRONMENT ?? 'unknown',
     access: accessConfigured(env) ? 'configured' : 'not configured',
+    killSwitch: killSwitchOn(env) ? 'on' : 'off',
     huggingface: huggingfaceConnected(env) ? 'connected' : 'not connected',
+    webSearch: webSearchConnected(env) ? 'connected' : 'not connected',
     models: {
       default: modelKey('workers-ai', DEFAULT_MODEL),
       'workers-ai': WORKERS_AI_MODELS.length,
       configured: parseHfModels(env?.HF_MODELS).length,
     },
-    tools: [...TOOL_NAMES],
-    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', health: '/health' },
+    tools: toolNames(env),
+    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images/<id>', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 

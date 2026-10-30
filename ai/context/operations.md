@@ -24,8 +24,8 @@ component-native desired-state repo.
   `{text, model, tools}`; an unknown model `400`, a Hugging Face model with
   no `HF_TOKEN` `409`, a provider failure `502` naming the model),
   `GET|POST /api/models` and `DELETE /api/models/<provider>/<owner>/<name>`
-  (only models added in the page can be removed), `GET|POST /api/memories`
-  and `DELETE /api/memories/<id>`. `GET /health` answers
+  (only models added in the page can be removed), `GET|POST /api/memories`,
+  `PATCH /api/memories/<id>` (move to a space) and `DELETE /api/memories/<id>`. `GET /health` answers
   `{"status":"ok","name":…,"environment":…,"access":…,"huggingface":…,"models":…,"tools":[…],"endpoints":…}`
   — names and counts only, never a value; anything else is a 404.
 - **The models** (`src/models.ts`) — three kinds, and `/api/chat` refuses
@@ -132,7 +132,13 @@ Caveats that matter:
     Inference Providers" (and read access for private Spaces); Inference
     Providers models answer `409` without it, public Spaces do not need it;
   - `HF_MODELS` — the Hugging Face models and Spaces to offer from the start,
-    comma-separated, a Space as `space:<owner>/<name>[#<endpoint>]`.
+    comma-separated, a Space as `space:<owner>/<name>[#<endpoint>]`;
+  - `TAVILY_API_KEY` — web search: with it the agent is offered
+    `webSearch` (Tavily); without it, `news` (Google News RSS) and
+    `readPage` still work, keyless;
+  - `AGENT_KILL_SWITCH` — the hard kill switch: `on` (true, 1, yes) and every
+    `/api` route answers `503` to everyone, the owner too, until it is set
+    `off` and the Worker redeployed.
   Set one with `orun secrets set <KEY> --org <ws> --env <env>`, then deploy.
   For local work they go in `apps/api/.dev.vars` (git-ignored).
 
@@ -155,7 +161,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | task | how |
 |---|---|
 | unlock the agent | store `AGENT_ACCESS_KEY` for the environment, deploy it, open `<worker URL>/` and enter the key (README, "Unlock the agent") |
-| add Hugging Face models | store `HF_TOKEN` and deploy, then add models in the page's side panel — or list them in `HF_MODELS` and deploy (README, "Add Hugging Face models") |
+| add Hugging Face models | store `HF_TOKEN` and deploy, then add models in the page's settings (☰ → Models) — or list them in `HF_MODELS` and deploy (README, "Add Hugging Face models") |
 | add a tool | `tool()` in `apps/api/src/agent.ts`, its name in `TOOL_NAMES`, a test in `tests/api`, merge |
 | change the built-in models | `WORKERS_AI_MODELS` (and `DEFAULT_MODEL`) in `apps/api/src/models.ts` — a model that calls tools |
 | change the memory schema | a new migration tag in `wrangler.jsonc` and `CREATE … IF NOT EXISTS` / `ALTER` in `AgentMemory`'s constructor; never edit `v1` |
@@ -166,6 +172,10 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | serve a custom domain | attach it to the Worker in Cloudflare (README, "Custom domain"), then replace the placeholder `personal-ai-agent.example.com` in `intent.yaml`'s `BASE_DOMAIN` (every environment) with it; the workers.dev URL keeps answering for the smoke |
 | add a key | `orun secrets set <KEY> --org <ws> --env <env>` and deploy; a new key name is also declared in the component's `optionalSecretEnv` and named in `runtimeSecrets` |
 | remove a key from the Worker | `pnpm exec wrangler secret delete <KEY> --env <env>` from `apps/api` — a deploy never deletes one |
+| stop the agent now | pause it in the page (☰ → Access → Pause the agent): chat answers `503` and no model is called, no redeploy; Resume undoes it. If the key may have leaked: store `AGENT_KILL_SWITCH` = `on` and deploy, then rotate the key, set the switch `off` and deploy |
+| turn on web search | store `TAVILY_API_KEY` and deploy; `/health` answers `"webSearch":"connected"` (README, "The news and the web") |
+| add a lookup source | a function in `apps/api/src/lookup.ts` (keyless, answers with a `url`, `{ error }` on failure), its `tool()` in `agent.ts` via `look(…, { fromTheWeb })`, its name in `TOOL_NAMES`, a stand-in route under `/lookup/<service>` in `tests/api/src/helpers.ts`, a test |
+| see what the agent did | ☰ → Access → What it did, or `GET /api/activity`: every tool call and whether a guard blocked it (README, "What keeps it safe") |
 | rotate the access key | store a new `AGENT_ACCESS_KEY` and deploy; every browser holding the old one is asked again |
 | headless credentials | `ORUN_TOKEN` (workspace-scoped) + `GITHUB_TOKEN` |
 

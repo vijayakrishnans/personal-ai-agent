@@ -37,6 +37,8 @@ spec:
     AGENT_ACCESS_KEY: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/AGENT_ACCESS_KEY"
     HF_TOKEN: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/HF_TOKEN"
     HF_MODELS: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/HF_MODELS"
+    AGENT_KILL_SWITCH: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/AGENT_KILL_SWITCH"
+    TAVILY_API_KEY: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/TAVILY_API_KEY"
   subscribe:
     environments:
       - name: dev
@@ -76,7 +78,7 @@ spec:
 
     # The keys secrets-live pushes as Worker secrets after each deploy — the
     # ones the environment has stored, named only in the log, never a value.
-    runtimeSecrets: AGENT_ACCESS_KEY,HF_TOKEN,HF_MODELS
+    runtimeSecrets: AGENT_ACCESS_KEY,HF_TOKEN,HF_MODELS,AGENT_KILL_SWITCH,TAVILY_API_KEY
 
     preDeployCommand: "echo 'No pre-deploy step configured.'"
     migrationCommand: "echo 'No migrations configured.'"
