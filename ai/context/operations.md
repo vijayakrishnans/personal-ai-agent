@@ -52,8 +52,12 @@ component-native desired-state repo.
   environment (`AgentMemory`, binding `MEMORY`, named `owner`), created by
   the `v1` migration in `wrangler.jsonc` on the first deploy. It keeps the
   facts the agent was told to remember (the newest 500, 500 characters
-  each) and the models added in the page (at most 50). The conversation is
-  NOT kept: it lives in the owner's browser (localStorage), with the key.
+  each, or a question with the answer kept: 1,000 and 4,000), the owner's
+  notes (each expiring after 2 or 7 days unless kept; the object's alarm
+  deletes them on time), the models added in the page (at most 50), and the
+  owner's conversations (the newest 300, saved by the page after every
+  answer, every secret redacted on the way in). The access key alone stays
+  in the browser.
 - **`tests/api`** — vitest: every route driven in-process with
   `app.request()`, the real `AgentMemory` over Node's own SQLite, Workers
   AI's binding stood in for, and Hugging Face's router and a Gradio Space

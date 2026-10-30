@@ -159,6 +159,35 @@ export async function hfStandIn() {
       const choice = answer(b.messages, (b.tools ?? []).map((t) => t.function.name), b.model, asked);
       return json(200, { id: "chatcmpl-1", object: "chat.completion", created: 1, model: b.model, choices: [{ index: 0, ...choice }], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } });
     }
+    // Music Spaces: their API's description, a job, its stream, and the file.
+    const music = /^\/spaces\/(ACE-Step\/ACE-Step|mrfakename\/yue2-3b)\/gradio_api\/(info|call\/(__call__|generate_song)(?:\/(\w+))?|file=(.+))$/.exec(path);
+    if (music) {
+      const [, space, what, endpoint, eventId, file] = music;
+      if (what === "info")
+        return json(200, {
+          named_endpoints:
+            space === "ACE-Step/ACE-Step"
+              ? { "/__call__": { parameters: [{ parameter_name: "audio_duration", parameter_default: -1 }, { parameter_name: "prompt", parameter_default: "funk" }, { parameter_name: "lyrics", parameter_default: "[verse]" }, { parameter_name: "infer_step", parameter_default: 60 }, { parameter_name: "guidance_scale", parameter_default: 15 }, { parameter_name: "manual_seeds" }] } }
+              : { "/generate_song": { parameters: [{ parameter_name: "style", parameter_default: "pop" }, { parameter_name: "lyrics" }, { parameter_name: "seed", parameter_default: 42 }] } },
+        });
+      if (file) {
+        res.writeHead(200, { "content-type": "audio/mpeg" });
+        return res.end(Buffer.from("ID3-fake-mp3-bytes"));
+      }
+      if (!eventId) {
+        const data = (parsed as { data: unknown[] }).data;
+        const id = `mu${jobs.size + 1}`;
+        jobs.set(id, JSON.stringify({ space, endpoint, data }));
+        return json(200, { event_id: id });
+      }
+      const job = JSON.parse(jobs.get(eventId) ?? "{}") as { space: string; data: unknown[] };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const style = String(job.data[job.space === "ACE-Step/ACE-Step" ? 1 : 0]);
+      if (style.includes("explode")) return res.end("event: heartbeat\ndata: null\n\nevent: error\ndata: \"GPU quota exceeded\"\n\n");
+      const base = `http://${req.headers.host}/spaces/${job.space}`;
+      const url = style.includes("elsewhere") ? "https://evil.example/x.mp3" : `${base}/gradio_api/file=/tmp/gradio/out.mp3`;
+      return res.end(`event: heartbeat\ndata: null\n\nevent: complete\ndata: ${JSON.stringify([{ path: "/tmp/gradio/out.mp3", url, orig_name: "out.mp3", meta: { _type: "gradio.FileData" } }, { done: true }])}\n\n`);
+    }
     const start = /^\/spaces\/([^/]+\/[^/]+)\/gradio_api\/call\/([\w-]+)$/.exec(path);
     if (start && req.method === "POST") {
       const [, space, endpoint] = start;
@@ -198,7 +227,14 @@ export async function webStandIn() {
   const server: Server = createServer(async (req, res) => {
     const raw = await body(req);
     const url = new URL(req.url ?? "/", "http://x");
-    calls.push({ method: req.method ?? "", path: url.pathname + url.search, auth: String(req.headers.authorization ?? ""), body: raw ? JSON.parse(raw) : undefined });
+    const parsed = (() => {
+      try {
+        return raw ? JSON.parse(raw) : undefined;
+      } catch {
+        return raw; // a form, as Overpass takes
+      }
+    })();
+    calls.push({ method: req.method ?? "", path: url.pathname + url.search, auth: String(req.headers.authorization ?? ""), body: parsed });
     const send = (status: number, type: string, b: string) => {
       res.writeHead(status, { "content-type": type });
       res.end(b);
@@ -245,6 +281,29 @@ export async function webStandIn() {
     }
     if (url.pathname === "/lookup/openalex/works/doi%3A10.1234%2Fw1" || url.pathname === "/lookup/openalex/works/W1") return lookup({ ...W("W1", "RAG", 2020, 3046), referenced_works_count: 60, type: "article" });
     if (url.pathname.startsWith("/lookup/openalex/works/")) return send(404, "application/json", "{}");
+    // OpenStreetMap: Nominatim's search, FOSSGIS's OSRM routes, Overpass.
+    if (url.pathname === "/lookup/nominatim/search") {
+      const q = url.searchParams.get("q") ?? "";
+      if (q.startsWith("Nowhere")) return lookup([]);
+      const at: Record<string, [string, string]> = { "Fort Kochi": ["9.9658", "76.2421"], Munnar: ["10.0889", "77.0595"] };
+      const [lat, lon] = at[q.split(",")[0] ?? ""] ?? ["9.9312", "76.2673"];
+      return lookup([{ lat, lon, display_name: `${q.split(",")[0]}, Ernakulam, Kerala, India`, type: "city" }]);
+    }
+    if (url.pathname.startsWith("/lookup/osrm/")) {
+      const profile = url.pathname.split("/")[3];
+      return lookup({ code: "Ok", routes: [{ distance: 128_400, duration: profile === "routed-foot" ? 95_000 : 13_500, geometry: { coordinates: [[76.2421, 9.9658], [76.6, 10.0], [77.0595, 10.0889]] } }] });
+    }
+    if (url.pathname === "/lookup/overpass/interpreter") {
+      const data = new URLSearchParams(raw).get("data") ?? "";
+      if (!data.includes('"amenity"="restaurant"')) return lookup({ elements: [] });
+      return lookup({
+        elements: [
+          { type: "node", id: 1, lat: 9.966, lon: 76.243, tags: { name: "Kashi Art Cafe", cuisine: "cafe;regional", "addr:street": "Burgher Street", opening_hours: "08:30-19:30", website: "https://kashi.example" } },
+          { type: "way", id: 2, center: { lat: 9.967, lon: 76.244 }, tags: { name: "Fort House" } },
+          { type: "node", id: 3, lat: 9.968, lon: 76.245, tags: {} },
+        ],
+      });
+    }
     if (url.pathname === "/big") return send(200, "text/plain", "x".repeat(50_000));
     if (url.pathname === "/file.pdf") return send(200, "application/pdf", "%PDF-1.4");
     if (url.pathname === "/search") {

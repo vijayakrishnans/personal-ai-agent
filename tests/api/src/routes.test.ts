@@ -17,8 +17,8 @@ describe("GET /health", () => {
       huggingface: "not connected",
       models: { default: "workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai": 12, configured: 0 },
       webSearch: "not connected",
-      tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "papers", "paper", "books", "readPage", "useSkill", "generateImage"],
-      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", notes: "/api/notes", images: "/api/images", saved: "/api/saved", skills: "/api/skills", state: "/api/state", activity: "/api/activity", health: "/health" },
+      tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "papers", "paper", "books", "readPage", "showMap", "route", "places", "useSkill", "generateImage", "composeMusic"],
+      endpoints: { chat: "/api/chat", conversations: "/api/conversations", models: "/api/models", memories: "/api/memories", notes: "/api/notes", images: "/api/images", music: "/api/music", saved: "/api/saved", skills: "/api/skills", state: "/api/state", activity: "/api/activity", health: "/health" },
     });
   });
 
@@ -121,8 +121,8 @@ describe("the kill switch", () => {
     const chat = () => app.request("/api/chat", { method: "POST", headers: auth(), body: chatBody }, x);
 
     const FLUX1 = "@cf/black-forest-labs/flux-1-schnell";
-    expect(await json(await state())).toEqual({ ok: true, paused: false, imageModel: FLUX1 });
-    expect(await json(await state({ paused: true }))).toEqual({ ok: true, paused: true, imageModel: FLUX1 });
+    expect(await json(await state())).toEqual({ ok: true, paused: false, imageModel: FLUX1, musicModel: "ACE-Step/ACE-Step" });
+    expect(await json(await state({ paused: true }))).toEqual({ ok: true, paused: true, imageModel: FLUX1, musicModel: "ACE-Step/ACE-Step" });
     const refused = await chat();
     expect(refused.status).toBe(503);
     expect((await json(refused)).error).toBe("agent_paused");
@@ -130,9 +130,9 @@ describe("the kill switch", () => {
     expect((await app.request("/api/memories", { headers: auth() }, x)).status).toBe(200);
 
     for (const bad of [{}, { paused: "yes" }, { paused: 1 }]) expect((await state(bad)).status, JSON.stringify(bad)).toBe(400);
-    expect(await json(await state())).toEqual({ ok: true, paused: true, imageModel: FLUX1 });
+    expect(await json(await state())).toEqual({ ok: true, paused: true, imageModel: FLUX1, musicModel: "ACE-Step/ACE-Step" });
 
-    expect(await json(await state({ paused: false }))).toEqual({ ok: true, paused: false, imageModel: FLUX1 });
+    expect(await json(await state({ paused: false }))).toEqual({ ok: true, paused: false, imageModel: FLUX1, musicModel: "ACE-Step/ACE-Step" });
     expect((await chat()).status).toBe(200);
     expect(x.asked).toHaveLength(1);
   });
