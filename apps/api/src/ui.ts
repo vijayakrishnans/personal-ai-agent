@@ -7,9 +7,11 @@
 // stay in the browser (localStorage); models and memories are read from and
 // written to /api with the key as a bearer token. The sidebar lists what the
 // agent remembers by space; ☰ opens the settings — the knowledge graph of
-// those spaces, the owner's notes and to-dos, the Hugging Face models, and
-// access — the kill switch, what the agent did, and locking this browser.
-// Images the agent draws are shown in the chat, fetched with the key.
+// those spaces, the owner's notes and to-dos, their library (every image the
+// agent drew, every answer they saved), the models — chat and image — and
+// access: the kill switch, what the agent did, and locking this browser.
+// Every message can be copied, added to the knowledge, or saved to the
+// library. Images are shown in the chat, fetched with the key.
 
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
@@ -43,6 +45,24 @@ main{flex:1;display:flex;min-height:0}
 .msg.user{align-self:flex-end;background:var(--me)}
 .msg .meta{display:block;margin-top:6px;font-size:12px;color:var(--muted)}
 .msg img{display:block;max-width:min(100%,512px);border-radius:10px;margin-top:8px;background:var(--line);aspect-ratio:1}
+.actions{display:flex;gap:4px;margin-top:6px;opacity:.55;transition:opacity .15s}
+.msg:hover .actions,.msg:focus-within .actions{opacity:1}
+.actions button{border:0;background:none;padding:2px 6px;font-size:12px;color:var(--muted);border-radius:6px}
+.actions button:hover{background:var(--bg);color:var(--ink)}
+dialog#to-knowledge{border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);width:min(480px,94vw);padding:20px}
+dialog#to-knowledge::backdrop{background:rgb(0 0 0 / .45)}
+dialog#to-knowledge textarea{width:100%;min-height:120px;resize:vertical}
+#library-images{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+#library-images figure{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column}
+#library-images img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--line)}
+#library-images figcaption{padding:8px;font-size:12px;display:grid;gap:6px}
+#library-images figcaption p{margin:0;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+#library-images .row button,#library-images .row a{font-size:12px;padding:2px 8px}
+#library-saved li{display:block;border-bottom:1px solid var(--line);padding:8px 0}
+#library-saved li p{margin:0 0 6px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:9em;overflow:hidden}
+#library-saved li.open p{max-height:none}
+#library-saved .row button{font-size:12px;padding:2px 8px}
+a.button{border:1px solid var(--line);border-radius:8px;color:inherit;text-decoration:none}
 #notes-lists{display:grid;gap:20px}
 #notes-lists li{align-items:center}
 #notes-lists li label{display:flex;gap:8px;align-items:flex-start;flex:1;cursor:pointer}
@@ -150,6 +170,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
       <div id="tabs" role="tablist">
         <button type="button" role="tab" data-tab="knowledge">Knowledge</button>
         <button type="button" role="tab" data-tab="notes">Notes</button>
+        <button type="button" role="tab" data-tab="library">Library</button>
         <button type="button" role="tab" data-tab="models">Models</button>
         <button type="button" role="tab" data-tab="access">Access</button>
       </div>
@@ -189,14 +210,32 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
         <div id="notes-lists"></div>
       </div>
     </section>
+    <section class="tab" id="tab-library" role="tabpanel" hidden>
+      <div style="display:grid;gap:24px">
+        <section>
+          <h2>Images</h2>
+          <div id="library-images"></div>
+        </section>
+        <section style="max-width:760px">
+          <h2>Saved</h2>
+          <ul class="items" id="library-saved"></ul>
+        </section>
+      </div>
+    </section>
     <section class="tab" id="tab-models" role="tabpanel" hidden>
       <div class="models">
         <section>
-          <h2>Add a Hugging Face model</h2>
+          <h2>Image model</h2>
+          <select id="image-model" aria-label="Image model"></select>
+          <p class="hint" id="image-note">Draws the pictures you ask for, on Workers AI.</p>
+        </section>
+        <section>
+          <h2>Add a model</h2>
           <form class="stack" id="add">
             <select id="add-provider">
-              <option value="huggingface">Inference Providers model (as HuggingChat uses)</option>
-              <option value="space">Gradio Space</option>
+              <option value="huggingface">Hugging Face: Inference Providers model (as HuggingChat uses)</option>
+              <option value="space">Hugging Face: Gradio Space</option>
+              <option value="workers-ai">Workers AI: any other @cf/… model</option>
             </select>
             <input id="add-id" placeholder="owner/name — e.g. openai/gpt-oss-120b" required>
             <input id="add-label" placeholder="Label (optional)">
@@ -234,6 +273,16 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     </section>
   </div>
 </dialog>
+<dialog id="to-knowledge" aria-labelledby="to-knowledge-title">
+  <form class="stack" id="knowledge-form" method="dialog">
+    <h2 id="to-knowledge-title">Add to knowledge</h2>
+    <p class="hint">One fact the agent keeps and is told in every conversation. Trim it to what matters.</p>
+    <textarea id="knowledge-text" maxlength="500" required></textarea>
+    <input id="knowledge-space" placeholder="Space — e.g. Work (default: General)" maxlength="40" list="space-names">
+    <p class="hint" id="knowledge-note"></p>
+    <div class="row"><button type="button" id="knowledge-cancel">Cancel</button><button class="primary" id="knowledge-save" value="save">Add</button></div>
+  </form>
+</dialog>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -249,6 +298,11 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
   let memories = [];
   let selected = null; // { kind: 'space', name } | { kind: 'memory', id }
   let paused = false;
+  let imageModels = [];
+  let chosenImageModel = '';
+  function renderImageModels() {
+    $('image-model').replaceChildren(...imageModels.map((m) => { const o = new Option(m.label, m.id); o.selected = m.id === chosenImageModel; return o; }));
+  }
 
   async function api(path, opts = {}) {
     const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key, ...(opts.headers || {}) } });
@@ -273,10 +327,67 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     div.textContent = m.content;
     for (const im of m.images || []) div.appendChild(picture(im));
     if (m.meta) { const s = document.createElement('span'); s.className = 'meta'; s.textContent = m.meta; div.appendChild(s); }
+    if (!m.error && m.content && m.content !== '…') div.appendChild(actions(m));
     $('log').appendChild(div);
     $('log').scrollTop = $('log').scrollHeight;
     return div;
   }
+  // EVERY MESSAGE'S ACTIONS: copy it, add it to the knowledge (as a memory
+  // the owner trims first), or save an answer whole to the library.
+  function actions(m) {
+    const bar = el('div', { className: 'actions' });
+    const flash = (b, text) => { const was = b.textContent; b.textContent = text; setTimeout(() => { b.textContent = was; }, 1400); };
+    const copy = el('button', { type: 'button', textContent: 'Copy', title: 'Copy to the clipboard' });
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(m.content); flash(copy, 'Copied'); }
+      catch { flash(copy, 'Copy failed'); }
+    };
+    const know = el('button', { type: 'button', textContent: 'Add to knowledge', title: 'Keep this as something the agent knows' });
+    know.onclick = () => toKnowledge(m.content);
+    bar.append(copy, know);
+    if (m.role === 'assistant') {
+      const save = el('button', { type: 'button', textContent: 'Save', title: 'Save this answer to your library' });
+      save.onclick = async () => {
+        try { await api('/api/saved', { method: 'POST', body: JSON.stringify({ text: m.content, source: (m.meta || '').split(' · used')[0] }) }); flash(save, 'Saved to library'); }
+        catch (err) { flash(save, err.message.slice(0, 40)); }
+      };
+      bar.append(save);
+    }
+    return bar;
+  }
+  function toKnowledge(text) {
+    $('knowledge-text').value = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+    $('knowledge-space').value = '';
+    $('knowledge-note').textContent = text.length > 500 ? 'Shortened to 500 characters: keep the part worth knowing.' : '';
+    $('to-knowledge').showModal();
+    $('knowledge-text').focus();
+  }
+
+  // THE LIBRARY: every image the agent drew, and every answer saved.
+  async function loadLibrary() {
+    const [{ images }, { saved }] = await Promise.all([api('/api/images'), api('/api/saved')]);
+    $('library-images').replaceChildren(...(images.length ? images.map((im) => {
+      const img = picture(im);
+      const download = el('a', { className: 'button', textContent: 'Download', href: '#' });
+      download.onclick = (e) => { e.preventDefault(); const url = pictures.get(im.id); if (url) { const a = el('a', { href: url, download: 'image-' + im.id }); a.click(); } };
+      const remove = el('button', { type: 'button', textContent: 'Delete', onclick: async () => { if (confirm('Delete this image?')) { await api('/api/images/' + im.id, { method: 'DELETE' }); loadLibrary(); } } });
+      return el('figure', {}, img, el('figcaption', {},
+        el('p', { textContent: im.prompt, title: im.prompt }),
+        el('span', { className: 'hint', textContent: new Date(im.createdAt).toLocaleDateString() + ' · ' + (im.model || '').split('/').pop() }),
+        el('div', { className: 'row' }, download, remove)));
+    }) : [el('p', { className: 'hint', textContent: 'No images yet. Ask your agent to draw something.' })]));
+    $('library-saved').replaceChildren(...(saved.length ? saved.map((it) => {
+      const item = el('li', {});
+      const copy = el('button', { type: 'button', textContent: 'Copy', onclick: () => navigator.clipboard.writeText(it.text).catch(() => {}) });
+      const more = el('button', { type: 'button', textContent: 'Show all', onclick: () => { item.classList.toggle('open'); more.textContent = item.classList.contains('open') ? 'Show less' : 'Show all'; } });
+      const know = el('button', { type: 'button', textContent: 'Add to knowledge', onclick: () => toKnowledge(it.text) });
+      const remove = el('button', { type: 'button', textContent: 'Delete', onclick: async () => { await api('/api/saved/' + it.id, { method: 'DELETE' }); loadLibrary(); } });
+      item.append(el('p', { textContent: it.text }), el('div', { className: 'row' },
+        el('span', { className: 'hint', style: 'flex:1', textContent: new Date(it.createdAt).toLocaleString() + (it.source ? ' · ' + it.source : '') }), copy, more, know, remove));
+      return item;
+    }) : [li('Nothing saved yet. Use “Save” under an answer.')]));
+  }
+
   // An image the agent drew: fetched with the key (an <img> cannot send it),
   // shown from a blob URL kept for the page's life.
   const pictures = new Map();
@@ -322,11 +433,18 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     const body = await api('/api/models');
     models = body.models;
     const chosen = store.get('agent.model', body.default);
-    $('model').replaceChildren(...models.map((m) => { const o = new Option(m.label, m.key); o.selected = m.key === chosen; return o; }));
+    const groups = [['workers-ai', 'Workers AI'], ['huggingface', 'Hugging Face'], ['space', 'Spaces']];
+    $('model').replaceChildren(...groups.map(([provider, label]) => {
+      const g = el('optgroup', { label });
+      g.append(...models.filter((m) => m.provider === provider).map((m) => { const o = new Option(m.label.replace(/ · (Workers AI|Hugging Face|Space)$/, ''), m.key); o.selected = m.key === chosen; return o; }));
+      return g;
+    }).filter((g) => g.children.length));
+    imageModels = body.images.models;
     const added = models.filter((m) => m.source === 'added');
     $('added').replaceChildren(...(added.length ? added.map((m) => li(m.label, async () => {
       await api('/api/models/' + [m.provider, ...m.id.split('/')].map(encodeURIComponent).join('/'), { method: 'DELETE' }); loadModels();
     })) : [li('None yet — add one above, or list them in HF_MODELS.')]));
+    renderImageModels();
     $('add-note').textContent = body.huggingface ? '' : 'HF_TOKEN is not stored: public Spaces work, Inference Providers models need it.';
   }
 
@@ -488,10 +606,11 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 
   function tab(name) {
     for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
-    for (const t of ['knowledge', 'notes', 'models', 'access']) $('tab-' + t).hidden = t !== name;
+    for (const t of ['knowledge', 'notes', 'library', 'models', 'access']) $('tab-' + t).hidden = t !== name;
     store.set('agent.tab', name);
     if (name === 'access') loadActivity().catch(() => {});
     if (name === 'notes') loadNotes().catch(() => {});
+    if (name === 'library') loadLibrary().catch(() => {});
   }
   function openSettings(name) { tab(name || store.get('agent.tab', 'knowledge')); if (!$('settings').open) $('settings').showModal(); }
 
@@ -504,7 +623,8 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 
   async function start() {
     $('lock').hidden = true;
-    showPaused((await api('/api/state')).paused);
+    const st = await api('/api/state');
+    showPaused(st.paused); chosenImageModel = st.imageModel;
     await loadModels(); await loadMemories(); render();
   }
 
@@ -538,9 +658,22 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     } catch (err) { $('memory-note').textContent = err.message; }
   };
   $('add-provider').onchange = () => {
-    const space = $('add-provider').value === 'space';
+    const provider = $('add-provider').value, space = provider === 'space';
     $('add-api').hidden = !space; $('add-tools-row').hidden = space;
-    $('add-id').placeholder = space ? 'owner/space — e.g. your-name/your-chat-space' : 'owner/name — e.g. openai/gpt-oss-120b';
+    $('add-id').placeholder = space ? 'owner/space — e.g. your-name/your-chat-space'
+      : provider === 'workers-ai' ? '@cf/owner/name — e.g. @cf/qwen/qwen3-30b-a3b-fp8' : 'owner/name — e.g. openai/gpt-oss-120b';
+  };
+  $('image-model').onchange = async () => {
+    try { chosenImageModel = (await api('/api/state', { method: 'PUT', body: JSON.stringify({ imageModel: $('image-model').value }) })).imageModel; $('image-note').textContent = 'Saved: new pictures use it.'; }
+    catch (err) { $('image-note').textContent = err.message; }
+  };
+  $('knowledge-cancel').onclick = () => $('to-knowledge').close();
+  $('knowledge-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { text: $('knowledge-text').value.trim() };
+    if ($('knowledge-space').value.trim()) body.space = $('knowledge-space').value.trim();
+    try { await api('/api/memories', { method: 'POST', body: JSON.stringify(body) }); $('to-knowledge').close(); await loadMemories(); }
+    catch (err) { $('knowledge-note').textContent = err.message; }
   };
   $('add').onsubmit = async (e) => {
     e.preventDefault();

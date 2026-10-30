@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import app from "@/index";
-import { catalog, parseHfModels } from "@/models";
+import { catalog, parseHfModels, WORKERS_AI_MODELS } from "@/models";
 import { answerFrom, spaceBaseUrl } from "@/spaces";
 import { DatabaseSync } from "node:sqlite";
 import { auth, env, KEY, json, memoryObject } from "./helpers";
@@ -23,8 +23,7 @@ describe("HF_MODELS", () => {
       { provider: "space", id: "me/s", label: "S", tools: true },
     ]);
     expect(list.map((m) => `${m.source}:${m.key}`)).toEqual([
-      "built-in:workers-ai:@cf/moonshotai/kimi-k2.6",
-      "built-in:workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      ...WORKERS_AI_MODELS.map((m) => `built-in:${m.key}`),
       "secret:huggingface:openai/gpt-oss-120b",
       "added:space:me/s",
     ]);
@@ -55,7 +54,30 @@ describe("/api/models", () => {
     const body = await json(await app.request("/api/models", { headers: auth() }, e()));
     expect(body.default).toBe("workers-ai:@cf/moonshotai/kimi-k2.6");
     expect(body.huggingface).toBe(false);
-    expect(body.models.map((m: { key: string }) => m.key)).toEqual(["workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast"]);
+    const keys = body.models.map((m: { key: string }) => m.key);
+    expect(keys[0]).toBe("workers-ai:@cf/moonshotai/kimi-k2.6");
+    expect(keys).toEqual(WORKERS_AI_MODELS.map((m) => m.key));
+    // Newer Workers AI families, every one offered with the agent's tools.
+    for (const id of ["@cf/deepseek-ai/deepseek-v4-pro-0813", "@cf/zai-org/glm-5.3", "@cf/qwen/qwen3.8-27b", "@cf/google/gemma-4-26b-a4b-it"]) expect(keys).toContain(`workers-ai:${id}`);
+    expect(WORKERS_AI_MODELS.every((m) => m.tools)).toBe(true);
+    expect(body.images.default).toBe("@cf/black-forest-labs/flux-1-schnell");
+    expect(body.images.models.map((m: { id: string }) => m.id)).toContain("@cf/black-forest-labs/flux-2-dev");
+  });
+
+  it("adds any other Workers AI model by its @cf id, and removes it again", async () => {
+    const x = e();
+    const a = await app.request("/api/models", post({ provider: "workers-ai", id: "@cf/qwen/qwen3-30b-a3b-fp8" }), x);
+    expect(a.status).toBe(201);
+    expect((await json(a)).model).toEqual({
+      key: "workers-ai:@cf/qwen/qwen3-30b-a3b-fp8",
+      provider: "workers-ai",
+      id: "@cf/qwen/qwen3-30b-a3b-fp8",
+      label: "qwen/qwen3-30b-a3b-fp8 · Workers AI",
+      tools: true,
+      source: "added",
+    });
+    expect((await app.request(`/api/models/workers-ai/${encodeURIComponent("@cf")}/qwen/qwen3-30b-a3b-fp8`, { method: "DELETE", headers: auth() }, x)).status).toBe(200);
+    expect(await x.memory.listModels()).toEqual([]);
   });
 
   it("adds a Hugging Face model and a Space, keeps them, and removes them again", async () => {
@@ -85,7 +107,10 @@ describe("/api/models", () => {
       { provider: "huggingface", id: "no-slash" },
       { provider: "space", id: "a/b/c" },
       { provider: "space", id: "a/b", apiName: "../../x" },
-      { provider: "workers-ai", id: "@cf/x/y" },
+      { provider: "workers-ai", id: "@hf/x/y" },
+      { provider: "workers-ai", id: "@cf/../x" },
+      { provider: "workers-ai", id: "https://evil.example/@cf/x/y" },
+      { provider: "openai", id: "gpt-5" },
       "not json",
     ]) {
       const res = await app.request("/api/models", post(b), e());

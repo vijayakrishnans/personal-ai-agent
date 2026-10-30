@@ -95,13 +95,23 @@ export function answer(messages: { role: string; content: unknown }[], tools: st
 /** A JPEG's first bytes, base64: what the image stand-in draws. */
 export const JPEG_BASE64 = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46));
 
+export const PNG_BASE64 = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a));
+
 export function aiStandIn() {
   const asked: Asked[] = [];
   const AI = {
-    async run(model: string, inputs: { prompt?: string; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[] }) {
+    async run(
+      model: string,
+      inputs: { prompt?: string; multipart?: { body: ReadableStream; contentType: string }; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[] },
+    ) {
       if (model.includes("flux")) {
-        asked.push({ model, tools: [], roles: [], system: inputs.prompt ?? "" });
-        return inputs.prompt?.includes("fail") ? {} : { image: JPEG_BASE64 };
+        // FLUX.2 takes a multipart form, FLUX.1 JSON; FLUX.2 answers with a PNG here.
+        const prompt = inputs.multipart
+          ? String((await new Response(inputs.multipart.body, { headers: { "content-type": inputs.multipart.contentType } }).formData()).get("prompt"))
+          : (inputs.prompt ?? "");
+        asked.push({ model, tools: [], roles: [], system: prompt });
+        if (prompt.includes("fail")) return {};
+        return { image: inputs.multipart ? PNG_BASE64 : JPEG_BASE64 };
       }
       const tools = (inputs.tools ?? []).map((t) => t.function?.name ?? "").filter(Boolean);
       return { choices: [answer(inputs.messages ?? [], tools, model, asked)], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } };

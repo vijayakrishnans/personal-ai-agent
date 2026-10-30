@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { Env } from './env'
 import { API_NAME } from './identity'
 import { CalcError, calculate, MAX_EXPRESSION } from './calc'
-import { drawImage, MAX_IMAGE_PROMPT, MAX_IMAGES_PER_TURN } from './images'
+import { drawImage, imageModel, MAX_IMAGE_PROMPT, MAX_IMAGES_PER_TURN } from './images'
 import { arxiv, books, dictionary, exchangeRate, hackerNews, weather, wikipedia } from './lookup'
 import { MAX_NOTE_CHARS, MAX_SPACE_CHARS, type Activity, type Image, type Memory, type MemoryStore } from './memory'
 import { languageModel, type ModelEntry } from './models'
@@ -335,15 +335,16 @@ export async function runAgent(opts: { env: Env; entry: ModelEntry; messages: Mo
     // ── making things ──
     generateImage: tool({
       description:
-        'Draw an image from a description and show it to the owner under your reply. Describe it fully: subject, setting, style, light. Do not repeat it as a link; just say what you drew.',
+        'Draw an image from a description and show it to the owner under your reply; it is also kept in their library. Describe it fully: subject, setting, style, light. Do not repeat it as a link; just say what you drew.',
       inputSchema: z.object({ prompt: z.string().min(3).max(MAX_IMAGE_PROMPT) }),
       execute: async ({ prompt }) =>
         logged('generateImage', prompt, async () => {
           if (hasSecret(prompt) || SECRET_MARKER.test(prompt)) return { blocked: 'that description carries a secret' }
           if (images.length >= MAX_IMAGES_PER_TURN) return { blocked: `at most ${MAX_IMAGES_PER_TURN} images a turn` }
-          const drawn = await drawImage(env, prompt)
+          const model = imageModel(await memory.getSetting('imageModel')).id
+          const drawn = await drawImage(env, prompt, model)
           if ('error' in drawn) return drawn
-          const image = await memory.saveImage(prompt, drawn.jpegBase64)
+          const image = await memory.saveImage(prompt, model, drawn.base64)
           images.push(image)
           return { imageId: image.id, shown: true }
         }),

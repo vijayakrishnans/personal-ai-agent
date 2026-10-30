@@ -163,7 +163,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | unlock the agent | store `AGENT_ACCESS_KEY` for the environment, deploy it, open `<worker URL>/` and enter the key (README, "Unlock the agent") |
 | add Hugging Face models | store `HF_TOKEN` and deploy, then add models in the page's settings (☰ → Models) — or list them in `HF_MODELS` and deploy (README, "Add Hugging Face models") |
 | add a tool | `tool()` in `apps/api/src/agent.ts`, its name in `TOOL_NAMES`, a test in `tests/api`, merge |
-| change the built-in models | `WORKERS_AI_MODELS` (and `DEFAULT_MODEL`) in `apps/api/src/models.ts` — a model that calls tools |
+| change the built-in models | `WORKERS_AI_MODELS` (and `DEFAULT_MODEL`) in `apps/api/src/models.ts` — a model that takes the Chat Completions input with `tools`. Any other `@cf/…` model the owner adds in ☰ → Models; image models are `IMAGE_MODELS` in `apps/api/src/images.ts` |
 | change the memory schema | a new migration tag in `wrangler.jsonc` and `CREATE … IF NOT EXISTS` / `ALTER` in `AgentMemory`'s constructor; never edit `v1` |
 | deploy a change | merge to `main`; watch the run; failed lanes → `gh run rerun --failed` |
 | deploy by hand | Orunbase's Deploy button, or `gh workflow run ci.yml --ref main -f environment=<env> [-f component=<a,b>]` — the named components (blank: every one) run in that environment as a merge runs them; started off `main` it is refused |
