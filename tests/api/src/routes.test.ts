@@ -56,6 +56,7 @@ describe("the owner's door (/api/*)", () => {
     ["POST", "/api/models"],
     ["GET", "/api/memories"],
     ["DELETE", "/api/memories/1"],
+    ["PATCH", "/api/memories/1"],
   ];
 
   it("is a 503 that says so, before an access key is stored", async () => {

@@ -37,7 +37,16 @@ describe("POST /api/chat — Workers AI", () => {
     expect((await x.memory.listMemories()).map((m) => m.text)).toEqual(["Prefers tea to coffee."]);
     await app.request("/api/chat", chat("workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast", "what do I drink?"), x);
     expect(x.asked.at(-1)?.model).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
-    expect(x.asked.at(-1)?.system).toContain("- [1] Prefers tea to coffee.");
+    expect(x.asked.at(-1)?.system).toContain("- [1] (General) Prefers tea to coffee.");
+  });
+
+  it("files what it remembers under the space the model names, and offers it again", async () => {
+    const x = env({ AGENT_ACCESS_KEY: KEY });
+    await app.request("/api/chat", chat(undefined, "remember in Food: Prefers tea to coffee."), x);
+    expect((await x.memory.listMemories()).map((m) => [m.text, m.space])).toEqual([["Prefers tea to coffee.", "Food"]]);
+    await app.request("/api/chat", chat(undefined, "what do I drink?"), x);
+    expect(x.asked.at(-1)?.system).toContain("- [1] (Food) Prefers tea to coffee.");
+    expect(x.asked.at(-1)?.system).toContain("Reuse an existing space when one fits (Food)");
   });
 
   it("refuses a model it does not offer, and a conversation that does not end with the owner", async () => {

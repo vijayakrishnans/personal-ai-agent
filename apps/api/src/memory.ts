@@ -7,7 +7,10 @@ import { DurableObject } from 'cloudflare:workers'
 // Worker never stores what was said. Reached over RPC, so every method here
 // is the whole of what the Worker can ask of it.
 
-export type Memory = { id: number; text: string; createdAt: string }
+// Every memory belongs to one space — a topic its owner can name, such as
+// Work or Health. The page draws the spaces as a graph; the agent files a
+// fact under one when it remembers it.
+export type Memory = { id: number; text: string; space: string; createdAt: string }
 
 export type StoredModel = {
   provider: 'huggingface' | 'space'
@@ -20,9 +23,10 @@ export type StoredModel = {
 // What the agent's routes need of the store. The Durable Object implements
 // it; the tests implement it in memory.
 export interface MemoryStore {
-  remember(text: string): Promise<Memory>
+  remember(text: string, space?: string): Promise<Memory>
   recall(query: string, limit?: number): Promise<Memory[]>
   forget(id: number): Promise<boolean>
+  moveMemory(id: number, space: string): Promise<Memory | null>
   listMemories(limit?: number): Promise<Memory[]>
   addModel(model: StoredModel): Promise<StoredModel>
   removeModel(provider: string, id: string): Promise<boolean>
@@ -33,6 +37,14 @@ export interface MemoryStore {
 export const MAX_MEMORY_CHARS = 500
 export const MAX_MEMORIES = 500
 export const MAX_MODELS = 50
+export const MAX_SPACE_CHARS = 40
+export const DEFAULT_SPACE = 'General'
+
+/** A space's name as stored: trimmed, one line, short; empty is the default space. */
+export function spaceName(space: string | undefined): string {
+  const clean = (space ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_SPACE_CHARS)
+  return clean || DEFAULT_SPACE
+}
 
 export class AgentMemory extends DurableObject implements MemoryStore {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
@@ -54,33 +66,45 @@ export class AgentMemory extends DurableObject implements MemoryStore {
           PRIMARY KEY (provider, id)
         );
       `)
+      // Memories kept before spaces existed have none: they join the default.
+      const columns = ctx.storage.sql.exec<{ name: string }>('PRAGMA table_info(memories)').toArray()
+      if (!columns.some((c) => c.name === 'space')) {
+        ctx.storage.sql.exec(`ALTER TABLE memories ADD COLUMN space TEXT NOT NULL DEFAULT '${DEFAULT_SPACE}'`)
+      }
     })
   }
 
-  async remember(text: string): Promise<Memory> {
+  async remember(text: string, space?: string): Promise<Memory> {
     const sql = this.ctx.storage.sql
     const clean = text.trim().slice(0, MAX_MEMORY_CHARS)
+    const filed = spaceName(space)
     const createdAt = new Date().toISOString()
-    const row = sql.exec<{ id: number }>('INSERT INTO memories (text, created_at) VALUES (?, ?) RETURNING id', clean, createdAt).one()
+    const row = sql.exec<{ id: number }>('INSERT INTO memories (text, space, created_at) VALUES (?, ?, ?) RETURNING id', clean, filed, createdAt).one()
     // The oldest go first once the store is full, so it never grows unbounded.
     sql.exec('DELETE FROM memories WHERE id NOT IN (SELECT id FROM memories ORDER BY id DESC LIMIT ?)', MAX_MEMORIES)
-    return { id: row.id, text: clean, createdAt }
+    return { id: row.id, text: clean, space: filed, createdAt }
   }
 
   async recall(query: string, limit = 10): Promise<Memory[]> {
     const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 1).slice(0, 8)
     if (words.length === 0) return this.listMemories(limit)
-    const where = words.map(() => "lower(text) LIKE ? ESCAPE '\\'").join(' OR ')
+    // A word matches a memory's text or the name of its space.
+    const where = words.map(() => "lower(text || ' ' || space) LIKE ? ESCAPE '\\'").join(' OR ')
     const args = words.map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
-    return this.rows(`SELECT id, text, created_at FROM memories WHERE ${where} ORDER BY id DESC LIMIT ?`, ...args, limit)
+    return this.rows(`SELECT id, text, space, created_at FROM memories WHERE ${where} ORDER BY id DESC LIMIT ?`, ...args, limit)
   }
 
   async forget(id: number): Promise<boolean> {
     return this.ctx.storage.sql.exec('DELETE FROM memories WHERE id = ?', id).rowsWritten > 0
   }
 
+  async moveMemory(id: number, space: string): Promise<Memory | null> {
+    const moved = this.rows('UPDATE memories SET space = ? WHERE id = ? RETURNING id, text, space, created_at', spaceName(space), id)
+    return moved[0] ?? null
+  }
+
   async listMemories(limit = 50): Promise<Memory[]> {
-    return this.rows('SELECT id, text, created_at FROM memories ORDER BY id DESC LIMIT ?', limit)
+    return this.rows('SELECT id, text, space, created_at FROM memories ORDER BY id DESC LIMIT ?', limit)
   }
 
   async addModel(model: StoredModel): Promise<StoredModel> {
@@ -122,9 +146,9 @@ export class AgentMemory extends DurableObject implements MemoryStore {
 
   private rows(query: string, ...args: (string | number)[]): Memory[] {
     return this.ctx.storage.sql
-      .exec<{ id: number; text: string; created_at: string }>(query, ...args)
+      .exec<{ id: number; text: string; space: string; created_at: string }>(query, ...args)
       .toArray()
-      .map((r) => ({ id: r.id, text: r.text, createdAt: r.created_at }))
+      .map((r) => ({ id: r.id, text: r.text, space: r.space, createdAt: r.created_at }))
   }
 }
 

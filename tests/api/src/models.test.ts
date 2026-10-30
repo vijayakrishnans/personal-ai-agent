@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import app from "@/index";
 import { catalog, parseHfModels } from "@/models";
 import { answerFrom, spaceBaseUrl } from "@/spaces";
-import { auth, env, KEY, json } from "./helpers";
+import { DatabaseSync } from "node:sqlite";
+import { auth, env, KEY, json, memoryObject } from "./helpers";
 
 describe("HF_MODELS", () => {
   it("reads models and Spaces, comma- or newline-separated, and drops what does not parse", () => {
@@ -113,5 +114,33 @@ describe("/api/memories", () => {
     expect((await app.request("/api/memories", { method: "POST", headers: auth(), body: JSON.stringify({ text: "x".repeat(501) }) }, x)).status).toBe(400);
     expect((await x.memory.recall("tea")).map((m) => m.text)).toEqual(["Prefers tea to coffee."]);
     expect(await x.memory.recall("100%_")).toEqual([]);
+  });
+
+  it("files a memory under a space, General by default, and moves it to another", async () => {
+    const x = env({ AGENT_ACCESS_KEY: KEY });
+    const post = (body: unknown) => app.request("/api/memories", { method: "POST", headers: auth(), body: JSON.stringify(body) }, x);
+    const patch = (id: number | string, body: unknown) => app.request(`/api/memories/${id}`, { method: "PATCH", headers: auth(), body: JSON.stringify(body) }, x);
+    expect((await json(await post({ text: "Lives in Kochi." }))).memory.space).toBe("General");
+    expect((await json(await post({ text: "Runs on Sundays.", space: "  Health " }))).memory.space).toBe("Health");
+    for (const space of ["", "   ", "x".repeat(41), 7]) expect((await post({ text: "Bad space.", space })).status, JSON.stringify(space)).toBe(400);
+
+    const moved = await patch(1, { space: "Home" });
+    expect(moved.status).toBe(200);
+    expect((await json(moved)).memory).toMatchObject({ id: 1, text: "Lives in Kochi.", space: "Home" });
+    expect((await patch(99, { space: "Home" })).status).toBe(404);
+    expect((await patch("abc", { space: "Home" })).status).toBe(404);
+    expect((await patch(1, {})).status).toBe(400);
+    expect((await x.memory.listMemories()).map((m) => [m.text, m.space])).toEqual([["Runs on Sundays.", "Health"], ["Lives in Kochi.", "Home"]]);
+    // recall finds a memory by the name of its space, too
+    expect((await x.memory.recall("health")).map((m) => m.text)).toEqual(["Runs on Sundays."]);
+  });
+
+  it("gives memories kept before spaces existed the default space", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE memories (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT NOT NULL)");
+    db.prepare("INSERT INTO memories (text, created_at) VALUES (?, ?)").run("Lives in Kochi.", "2026-10-01T00:00:00.000Z");
+    const upgraded = memoryObject(db);
+    expect((await upgraded.listMemories()).map((m) => [m.text, m.space])).toEqual([["Lives in Kochi.", "General"]]);
+    expect((await upgraded.remember("Runs on Sundays.", "Health")).space).toBe("Health");
   });
 });

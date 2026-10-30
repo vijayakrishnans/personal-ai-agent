@@ -4,7 +4,7 @@ import { runAgent, ChatRequest, TOOL_NAMES } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, type Env } from './env'
 import { API_NAME } from './identity'
-import { memoryOf, MAX_MEMORY_CHARS, type MemoryStore } from './memory'
+import { memoryOf, MAX_MEMORY_CHARS, MAX_SPACE_CHARS, type MemoryStore } from './memory'
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
 import { page } from './ui'
@@ -87,17 +87,40 @@ app.delete('/api/models/:provider/:owner/:name', async (c) => {
   return removed ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
+const INVALID_SPACE = { ok: false, error: 'invalid_space', message: `a space is a name of 1-${MAX_SPACE_CHARS} characters` }
+
+/** A space as a request sends it: absent is undefined (the default space), a bad one null. */
+function spaceParam(space: unknown): string | undefined | null {
+  if (space === undefined) return undefined
+  if (typeof space !== 'string') return null
+  const clean = space.trim()
+  return clean && clean.length <= MAX_SPACE_CHARS ? clean : null
+}
+
 app.get('/api/memories', async (c) => {
   return c.json({ memories: await c.var.memory.listMemories(100) })
 })
 
 app.post('/api/memories', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { text?: unknown } | null
+  const body = (await c.req.json().catch(() => null)) as { text?: unknown; space?: unknown } | null
   const text = typeof body?.text === 'string' ? body.text.trim() : ''
   if (!text || text.length > MAX_MEMORY_CHARS) {
     return c.json({ ok: false, error: 'invalid_memory', message: `one fact of 1-${MAX_MEMORY_CHARS} characters` }, 400)
   }
-  return c.json({ ok: true, memory: await c.var.memory.remember(text) }, 201)
+  const space = spaceParam(body?.space)
+  if (space === null) return c.json(INVALID_SPACE, 400)
+  return c.json({ ok: true, memory: await c.var.memory.remember(text, space) }, 201)
+})
+
+// Moving a memory to another space — the page's graph does it.
+app.patch('/api/memories/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id < 1) return c.json({ ok: false, error: 'not_found' }, 404)
+  const body = (await c.req.json().catch(() => null)) as { space?: unknown } | null
+  const space = spaceParam(body?.space)
+  if (!space) return c.json(INVALID_SPACE, 400)
+  const memory = await c.var.memory.moveMemory(id, space)
+  return memory ? c.json({ ok: true, memory }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
 app.delete('/api/memories/:id', async (c) => {

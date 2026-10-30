@@ -2,7 +2,7 @@ import { APICallError, generateText, stepCountIs, tool, type ModelMessage } from
 import { z } from 'zod'
 import type { Env } from './env'
 import { API_NAME } from './identity'
-import type { Memory, MemoryStore } from './memory'
+import { MAX_SPACE_CHARS, type Memory, type MemoryStore } from './memory'
 import { languageModel, type ModelEntry } from './models'
 import { callSpace } from './spaces'
 
@@ -28,15 +28,18 @@ const PROMPT_MEMORIES = 30
 
 export function systemPrompt(memories: Memory[], today: string, tools: boolean): string {
   const known = memories.length
-    ? memories.map((m) => `- [${m.id}] ${m.text}`).join('\n')
+    ? memories.map((m) => `- [${m.id}] (${m.space}) ${m.text}`).join('\n')
     : '- (nothing yet)'
+  const spaces = [...new Set(memories.map((m) => m.space))]
   return [
     `You are ${API_NAME}, a personal AI agent working for one person: your owner. Be direct, warm and concise.`,
     `Today is ${today}.`,
-    'What you remember about your owner (most recent first):',
+    'What you remember about your owner (most recent first; the space each fact is filed under is in parentheses):',
     known,
     tools
-      ? "When your owner tells you something worth keeping — a preference, a fact about them, a plan — call `remember` with one short sentence. Use `recall` to look something up, and `forget` (with the number in brackets) when they ask you to. Never claim to have remembered something unless `remember` succeeded."
+      ? "When your owner tells you something worth keeping — a preference, a fact about them, a plan — call `remember` with one short sentence and the space it belongs in: a short topic such as Work, Health or Travel. Reuse an existing space when one fits" +
+        (spaces.length ? ` (${spaces.join(', ')})` : '') +
+        ". Use `recall` to look something up, and `forget` (with the number in brackets) when they ask you to. Never claim to have remembered something unless `remember` succeeded."
       : 'You cannot save new memories in this conversation; if asked to, say the owner should switch to a model that uses tools.',
     'Never invent facts about your owner.',
   ].join('\n')
@@ -57,11 +60,14 @@ export async function runAgent(opts: { env: Env; entry: ModelEntry; messages: Mo
   const tools = {
     remember: tool({
       description: 'Save one short fact about the owner for future conversations.',
-      inputSchema: z.object({ fact: z.string().min(1).max(500).describe('One sentence, in the third person: "Prefers tea to coffee."') }),
-      execute: async ({ fact }) => memory.remember(fact),
+      inputSchema: z.object({
+        fact: z.string().min(1).max(500).describe('One sentence, in the third person: "Prefers tea to coffee."'),
+        space: z.string().max(MAX_SPACE_CHARS).optional().describe('The topic it belongs in, e.g. "Food". Reuse an existing space when one fits.'),
+      }),
+      execute: async ({ fact, space }) => memory.remember(fact, space),
     }),
     recall: tool({
-      description: 'Search what you remember about the owner.',
+      description: 'Search what you remember about the owner, by words in a fact or the name of its space.',
       inputSchema: z.object({ query: z.string().max(200).describe('Words to look for; empty lists the most recent.') }),
       execute: async ({ query }) => ({ memories: await memory.recall(query) }),
     }),

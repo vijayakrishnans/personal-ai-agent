@@ -24,8 +24,8 @@ component-native desired-state repo.
   `{text, model, tools}`; an unknown model `400`, a Hugging Face model with
   no `HF_TOKEN` `409`, a provider failure `502` naming the model),
   `GET|POST /api/models` and `DELETE /api/models/<provider>/<owner>/<name>`
-  (only models added in the page can be removed), `GET|POST /api/memories`
-  and `DELETE /api/memories/<id>`. `GET /health` answers
+  (only models added in the page can be removed), `GET|POST /api/memories`,
+  `PATCH /api/memories/<id>` (move to a space) and `DELETE /api/memories/<id>`. `GET /health` answers
   `{"status":"ok","name":…,"environment":…,"access":…,"huggingface":…,"models":…,"tools":[…],"endpoints":…}`
   — names and counts only, never a value; anything else is a 404.
 - **The models** (`src/models.ts`) — three kinds, and `/api/chat` refuses
@@ -155,7 +155,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | task | how |
 |---|---|
 | unlock the agent | store `AGENT_ACCESS_KEY` for the environment, deploy it, open `<worker URL>/` and enter the key (README, "Unlock the agent") |
-| add Hugging Face models | store `HF_TOKEN` and deploy, then add models in the page's side panel — or list them in `HF_MODELS` and deploy (README, "Add Hugging Face models") |
+| add Hugging Face models | store `HF_TOKEN` and deploy, then add models in the page's settings (☰ → Models) — or list them in `HF_MODELS` and deploy (README, "Add Hugging Face models") |
 | add a tool | `tool()` in `apps/api/src/agent.ts`, its name in `TOOL_NAMES`, a test in `tests/api`, merge |
 | change the built-in models | `WORKERS_AI_MODELS` (and `DEFAULT_MODEL`) in `apps/api/src/models.ts` — a model that calls tools |
 | change the memory schema | a new migration tag in `wrangler.jsonc` and `CREATE … IF NOT EXISTS` / `ALTER` in `AgentMemory`'s constructor; never edit `v1` |

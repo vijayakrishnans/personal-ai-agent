@@ -63,8 +63,8 @@ same token.
 
 Then add models in either of two ways:
 
-- **In the page.** Open the side panel (☰) and use **Add a Hugging Face
-  model**:
+- **In the page.** Open the settings (☰), go to **Models** and use **Add a
+  Hugging Face model**:
   - **Inference Providers model**: a Hub id such as `openai/gpt-oss-120b`,
     `meta-llama/Llama-3.3-70B-Instruct` or `Qwen/Qwen3-Coder-480B-A35B-Instruct`.
     These are the models HuggingChat lists. Add `:fastest`, `:cheapest` or a
@@ -97,15 +97,22 @@ and a sleeping Space wakes on the first call, which can take a while.
 
 | Tool | What it does |
 |---|---|
-| `remember` | saves one short fact about you |
-| `recall` | searches what it remembers |
+| `remember` | saves one short fact about you, in a space such as Work or Health |
+| `recall` | searches what it remembers, by words in a fact or its space |
 | `forget` | deletes a fact by its number |
 | `currentTime` | the date and time in UTC |
 
 Every model, tools or not, is told the 30 most recent facts in its system
 prompt. Only a model that calls tools can save new ones. Spaces see your
-message alone. The side panel lists every fact and lets you delete it. The
-store keeps the newest 500. **The conversation itself stays in your browser**
+message alone. The store keeps the newest 500.
+
+Every fact is filed under a **space**, a topic the agent picks when it
+remembers (it reuses one that fits) and `General` when none is named. The
+sidebar lists them by space and lets you delete one; its **‹ Collapse** at
+the bottom folds it away. Settings (☰) → **Knowledge** draws them as a graph:
+you in the centre, each space a hub, each fact around its hub. Click a fact to
+move it to another space or remove it, click a space to rename it, or add a
+fact yourself. **The conversation itself stays in your browser**
 (localStorage), and the Worker stores nothing of what was said. **New chat**
 clears it.
 
@@ -116,7 +123,7 @@ clears it.
 | `GET /` | the agent's page: chat, model picker, added models, memories |
 | `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…]}` → `{"text", "model", "tools"}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
-| `GET /api/memories`, `POST /api/memories`, `DELETE /api/memories/<id>` | what it remembers |
+| `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
 | `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"huggingface":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |
 

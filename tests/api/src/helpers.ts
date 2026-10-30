@@ -12,8 +12,7 @@ export const auth = (key = KEY) => ({ authorization: `Bearer ${key}`, "content-t
  * A Durable Object's SQL storage over Node's SQLite: `exec` returns the
  * cursor shape the runtime's does (`one`, `toArray`, `rowsWritten`).
  */
-function sqlStorage() {
-  const db = new DatabaseSync(":memory:");
+export function sqlStorage(db = new DatabaseSync(":memory:")) {
   return {
     exec(query: string, ...bindings: (string | number | null)[]) {
       if (bindings.length === 0 && /;\s*\S/.test(query)) {
@@ -21,9 +20,10 @@ function sqlStorage() {
         return { toArray: () => [], one: () => undefined, rowsWritten: 0 };
       }
       const stmt = db.prepare(query);
-      const returnsRows = /^\s*select\b/i.test(query) || /\breturning\b/i.test(query);
+      const reads = /^\s*(select|pragma)\b/i.test(query);
+      const returnsRows = reads || /\breturning\b/i.test(query);
       const rows = returnsRows ? (stmt.all(...bindings) as Record<string, unknown>[]) : [];
-      const rowsWritten = returnsRows ? (/^\s*select\b/i.test(query) ? 0 : rows.length) : Number(stmt.run(...bindings).changes);
+      const rowsWritten = returnsRows ? (reads ? 0 : rows.length) : Number(stmt.run(...bindings).changes);
       return {
         toArray: () => rows,
         one: () => {
@@ -36,10 +36,15 @@ function sqlStorage() {
   };
 }
 
+/** One AgentMemory over an in-process SQLite database — a fresh one, or `db` as it already is. */
+export function memoryObject(db?: DatabaseSync) {
+  const ctx = { storage: { sql: sqlStorage(db) }, blockConcurrencyWhile: (fn: () => unknown) => fn() };
+  return new AgentMemory(ctx as unknown as DurableObjectState, {} as Cloudflare.Env);
+}
+
 /** The MEMORY namespace with ONE real AgentMemory behind it, as the Worker's `owner` object. */
-export function memoryNamespace() {
-  const ctx = { storage: { sql: sqlStorage() }, blockConcurrencyWhile: (fn: () => unknown) => fn() };
-  const object = new AgentMemory(ctx as unknown as DurableObjectState, {} as Cloudflare.Env);
+export function memoryNamespace(db?: DatabaseSync) {
+  const object = memoryObject(db);
   const names: string[] = [];
   const ns = {
     idFromName: (name: string) => (names.push(name), { name }),
@@ -54,7 +59,8 @@ export type Asked = { model: string; tools: string[]; roles: string[]; system: s
 
 /**
  * A model that answers in the OpenAI chat-completions shape, deterministically:
- * a tool result is quoted, `remember: <fact>` becomes a `remember` call, and
+ * a tool result is quoted, `remember: <fact>` (or `remember in <Space>: <fact>`)
+ * becomes a `remember` call, and
  * anything else is echoed. Workers AI's binding and Hugging Face's router
  * both speak it; each records what it was asked.
  */
@@ -63,10 +69,11 @@ export function answer(messages: { role: string; content: unknown }[], tools: st
   const last = messages[messages.length - 1];
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
   if (last?.role === "tool") return { message: { role: "assistant", content: `Tool said: ${text(last.content)}` }, finish_reason: "stop" };
-  const fact = /^remember: (.+)$/.exec(text(lastUser?.content));
+  const fact = /^remember(?: in (\w+))?: (.+)$/.exec(text(lastUser?.content));
   if (fact && tools.includes("remember")) {
+    const args = { fact: fact[2], ...(fact[1] ? { space: fact[1] } : {}) };
     return {
-      message: { role: "assistant", content: "", tool_calls: [{ id: `call_${messages.length}`, type: "function", function: { name: "remember", arguments: JSON.stringify({ fact: fact[1] }) } }] },
+      message: { role: "assistant", content: "", tool_calls: [{ id: `call_${messages.length}`, type: "function", function: { name: "remember", arguments: JSON.stringify(args) } }] },
       finish_reason: "tool_calls",
     };
   }
