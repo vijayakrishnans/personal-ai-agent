@@ -796,12 +796,46 @@ const SCRIPT = String.raw`
     )) : [el('p', { className: 'hint', textContent: 'No notes. Save an answer as a note, add one here, or ask your agent: “add milk to my groceries”. Notes go after 2 days unless you keep them.' })]));
   }
 
+  // WHAT IT DID: the newest four here; the whole log (the last 100) opens in
+  // a window of its own, filtered by outcome.
+  const activityRow = (a, doc) => {
+    const make = (tag, props) => Object.assign((doc || document).createElement(tag), props);
+    const row = make('li', { className: a.outcome });
+    row.append(make('span', { className: 'when', textContent: new Date(a.at).toLocaleString() }),
+      make('span', { className: 'what', textContent: a.tool + (a.outcome === 'ok' ? '' : ' · ' + a.outcome) + (a.detail ? ' — ' + a.detail : '') }));
+    return row;
+  };
   async function loadActivity() {
     const { activity } = await api('/api/activity');
-    $('activity').replaceChildren(...(activity.length ? activity.map((a) => el('li', { className: a.outcome },
-      el('span', { className: 'when', textContent: new Date(a.at).toLocaleString() }),
-      el('span', { className: 'what', textContent: a.tool + (a.outcome === 'ok' ? '' : ' · ' + a.outcome) + (a.detail ? ' — ' + a.detail : '') }),
-    )) : [li('Nothing yet.')]));
+    $('activity').replaceChildren(...(activity.length ? activity.slice(0, 4).map((a) => activityRow(a)) : [li('Nothing yet.')]));
+    $('activity-all').hidden = activity.length <= 4;
+    $('activity-all').textContent = 'Open the full log (' + activity.length + ') ↗';
+  }
+  async function openActivity() {
+    const w = window.open('', '_blank');
+    if (!w) { toast('Allow pop-ups for this page to open the log'); return; }
+    const d = w.document;
+    d.title = 'What it did — ' + document.title;
+    const style = d.createElement('style');
+    style.textContent = ':root{color-scheme:light dark}body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:Canvas;color:CanvasText}main{max-width:900px;margin:0 auto;padding:24px}h1{font-size:18px;margin:0 0 4px}p{margin:0 0 16px;opacity:.7}nav{display:flex;gap:6px;margin:0 0 12px}nav button{font:inherit;padding:4px 12px;border-radius:999px;border:1px solid #8886;background:none;color:inherit;cursor:pointer}nav button[aria-pressed=true]{background:#3b5bdb;border-color:#3b5bdb;color:#fff}ul{list-style:none;margin:0;padding:0}li{display:grid;grid-template-columns:190px 1fr;gap:10px;border-bottom:1px solid #8883;padding:7px 0}.when{opacity:.65;white-space:nowrap}.what{overflow-wrap:anywhere}.blocked .what,.error .what{color:#d93a2b}';
+    d.head.append(style);
+    const main = d.createElement('main');
+    const list = d.createElement('ul');
+    const nav = d.createElement('nav');
+    let all = [];
+    const show = (f) => {
+      for (const b of nav.children) b.setAttribute('aria-pressed', String(b.dataset.f === f));
+      const rows = all.filter((a) => f === 'all' || a.outcome === f);
+      list.replaceChildren(...(rows.length ? rows.map((a) => activityRow(a, d)) : [Object.assign(d.createElement('li'), { textContent: 'Nothing here.' })]));
+    };
+    for (const [f, label] of [['all', 'All'], ['ok', 'Worked'], ['error', 'Failed'], ['blocked', 'Blocked']]) {
+      const b = d.createElement('button'); b.dataset.f = f; b.textContent = label; b.onclick = () => show(f); nav.append(b);
+    }
+    const h = d.createElement('h1'); h.textContent = 'What it did';
+    const p = d.createElement('p'); p.textContent = 'Every tool the agent called, newest first (the last 100). Failed shows why; blocked means a guard refused it.';
+    main.append(h, p, nav, list); d.body.append(main);
+    try { all = (await api('/api/activity')).activity; show('all'); }
+    catch (err) { list.textContent = err.message; }
   }
 
   function tab(name) {
@@ -849,6 +883,7 @@ const SCRIPT = String.raw`
   for (const b of document.querySelectorAll('#tabs button')) b.onclick = () => tab(b.dataset.tab);
   $('collapse').onclick = () => collapse(!$('side').classList.contains('collapsed'));
   $('switch').onclick = () => setPaused(!paused);
+  $('activity-all').onclick = () => openActivity();
   $('resume-banner').onclick = () => setPaused(false);
   $('lock-now').onclick = () => lock('Locked. Enter the access key to use this agent here again.');
   $('note-form').onsubmit = async (e) => {
@@ -1330,6 +1365,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
           <h2>What it did</h2>
           <p class="hint">Every tool the agent called, newest first. Blocked means a guard refused it: a secret kept out, a link nobody gave it, or a memory change after reading the web.</p>
           <ul class="items" id="activity"></ul>
+          <p><button type="button" class="link" id="activity-all" hidden>Open the full log ↗</button></p>
         </section>
         <section>
           <h2>This browser</h2>

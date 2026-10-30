@@ -97,6 +97,9 @@ export async function papers(env: Env, opts: { query: string; sort?: PaperSort; 
   const words = opts.query.replace(/[,:|]/g, ' ').replace(/\s+/g, ' ').trim()
   const filters = [`title_and_abstract.search:${words}`]
   if (opts.fromYear) filters.push(`from_publication_date:${opts.fromYear}-01-01`)
+  // Newest first would lead with works dated in the future (theses and
+  // preprints with a planned date): only those out by today.
+  if (opts.sort === 'newest') filters.push(`to_publication_date:${new Date().toISOString().slice(0, 10)}`)
   const params: Record<string, string> = { filter: filters.join(','), per_page: '8', select: SELECT }
   const sort = SORTS[opts.sort ?? 'relevance']
   if (sort) params.sort = sort

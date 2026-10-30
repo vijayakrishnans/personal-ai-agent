@@ -283,3 +283,18 @@ describe("the page's script", () => {
     expect(page("x")).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
   });
 });
+
+describe("the activity log", () => {
+  it("keeps why a tool failed", async () => {
+    const x = owner();
+    await app.request("/api/chat", { method: "POST", headers: auth(), body: JSON.stringify({ messages: [{ role: "user", content: `call places {"kind":"museum","near":"Fort Kochi"}` }] }) }, x);
+    expect((await x.memory.listActivity())[0]).toMatchObject({ tool: "places", outcome: "error", detail: expect.stringMatching(/^museum near Fort Kochi — no museum with a name within 2 km/) });
+  });
+
+  it("newest papers are only those out by today", async () => {
+    const x = owner();
+    await app.request("/api/chat", { method: "POST", headers: auth(), body: JSON.stringify({ messages: [{ role: "user", content: `call papers {"query":"rag","sort":"newest"}` }] }) }, x);
+    const asked = web.calls.filter((c) => c.path.startsWith("/lookup/openalex/works?")).at(-1)?.path ?? "";
+    expect(decodeURIComponent(asked)).toContain(`to_publication_date:${new Date().toISOString().slice(0, 10)}`);
+  });
+});

@@ -211,7 +211,9 @@ export async function runAgent(opts: { env: Env; entry: ModelEntry; messages: Mo
     const result = await run()
     const blocked = typeof result === 'object' && result !== null && 'blocked' in result ? (result as { blocked: string }).blocked : null
     const outcome: Activity['outcome'] = blocked ? 'blocked' : typeof result === 'object' && result !== null && 'error' in result ? 'error' : 'ok'
-    await memory.logActivity({ tool, detail: redact(detail).text + (blocked ? ` — ${blocked}` : ''), outcome }).catch(() => {})
+    // A failure keeps its reason, so the owner can see why a tool did not answer.
+    const why = blocked ?? (outcome === 'error' ? String((result as { error: unknown }).error).slice(0, 160) : null)
+    await memory.logActivity({ tool, detail: redact(detail).text + (why ? ` — ${why}` : ''), outcome }).catch(() => {})
     return blocked ? { error: `blocked: ${blocked}` } : (result as T)
   }
 
