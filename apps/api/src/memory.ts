@@ -6,22 +6,36 @@ import { MAX_SKILLS, type Skill } from './skills'
 // agent was asked to remember, its owner's notes and to-dos, its owner's
 // library (the images it drew, the answers they saved), the models its owner
 // added in the page, the skills its owner wrote, its settings (paused? which
-// image model?), and a log of the tools it called — and nothing else: a conversation lives in the owner's browser, so the
-// Worker never stores what was said. Reached over RPC, so every method here
-// is the whole of what the Worker can ask of it.
+// image model?), a log of the tools it called, and the owner's conversations
+// — each saved with every secret already taken out, so the sidebar can list
+// and search them. Reached over RPC, so every method here is the whole of
+// what the Worker can ask of it.
 
 // Every memory belongs to one space — a topic its owner can name, such as
 // Work or Health. The page draws the spaces as a graph; the agent files a
 // fact under one when it remembers it.
-export type Memory = { id: number; text: string; space: string; createdAt: string }
+// A memory is a fact ("Prefers tea"), or a question the owner asked and the
+// answer they kept: `question` set, `text` the answer.
+export type Memory = { id: number; text: string; space: string; question: string | null; createdAt: string }
 
 // One tool call, as the activity log keeps it: never a secret (the detail is
 // redacted before it is written) and never more than a line.
 export type Activity = { id: number; at: string; tool: string; detail: string; outcome: 'ok' | 'blocked' | 'error' }
 
-// A note or a to-do on one of the owner's lists ("Notes" by default).
-export type Note = { id: number; list: string; text: string; done: boolean; createdAt: string }
-export type NoteChange = { text?: string; list?: string; done?: boolean }
+// A note or a to-do on one of the owner's lists ("Notes" by default). Notes
+// are short-lived: one expires (is deleted) KEEP_DAYS after it was kept,
+// unless the owner keeps it for longer, for good, or moves it to knowledge.
+export type Note = { id: number; list: string; text: string; done: boolean; createdAt: string; expiresAt: string | null }
+export type NoteChange = { text?: string; list?: string; done?: boolean; keepDays?: KeepDays }
+/** How long a note is kept from now: a number of days, or null for good. */
+export type KeepDays = 2 | 7 | null
+export const KEEP_DAYS: KeepDays = 2
+
+// A conversation as the page keeps it: its messages (role, words, and what
+// was shown with them), titled by its first question.
+export type ConversationMessage = { role: 'user' | 'assistant'; content: string; meta?: string; error?: boolean; images?: { id: number; prompt: string }[]; maps?: unknown[] }
+export type ConversationSummary = { id: string; title: string; updatedAt: string; snippet?: string }
+export type Conversation = ConversationSummary & { messages: ConversationMessage[] }
 
 // An image the agent drew: what was asked for, with which model, and when.
 // Its bytes are fetched on their own (getImage), never handed to a model.
@@ -42,7 +56,7 @@ export type StoredModel = {
 // What the agent's routes need of the store. The Durable Object implements
 // it; the tests implement it in memory.
 export interface MemoryStore {
-  remember(text: string, space?: string): Promise<Memory>
+  remember(text: string, space?: string, question?: string): Promise<Memory>
   recall(query: string, limit?: number): Promise<Memory[]>
   forget(id: number): Promise<boolean>
   moveMemory(id: number, space: string): Promise<Memory | null>
@@ -54,7 +68,7 @@ export interface MemoryStore {
   setPaused(paused: boolean): Promise<boolean>
   logActivity(entry: Omit<Activity, 'id' | 'at'>): Promise<void>
   listActivity(limit?: number): Promise<Activity[]>
-  addNote(text: string, list?: string): Promise<Note>
+  addNote(text: string, list?: string, keepDays?: KeepDays): Promise<Note>
   listNotes(list?: string): Promise<Note[]>
   updateNote(id: number, change: NoteChange): Promise<Note | null>
   deleteNote(id: number): Promise<boolean>
@@ -68,6 +82,10 @@ export interface MemoryStore {
   listSkills(): Promise<Skill[]>
   saveSkill(skill: Skill): Promise<Skill>
   deleteSkill(name: string): Promise<boolean>
+  saveConversation(id: string, messages: ConversationMessage[], title?: string): Promise<ConversationSummary>
+  getConversation(id: string): Promise<Conversation | null>
+  listConversations(query?: string, limit?: number): Promise<ConversationSummary[]>
+  deleteConversation(id: string): Promise<boolean>
   getSetting(key: SettingKey): Promise<string | null>
   setSetting(key: SettingKey, value: string): Promise<void>
 }
@@ -76,10 +94,17 @@ export type SettingKey = 'imageModel'
 
 // A fact or a model the owner can see in full on one screen.
 export const MAX_MEMORY_CHARS = 500
+// A kept answer may be longer than a fact; the prompt carries only its start.
+export const MAX_ANSWER_CHARS = 4000
+export const MAX_QUESTION_CHARS = 1000
+export const MAX_CONVERSATIONS = 300
+export const MAX_CONVERSATION_BYTES = 1_500_000
+export const MAX_TITLE_CHARS = 80
 export const MAX_MEMORIES = 500
 export const MAX_MODELS = 50
 export const MAX_ACTIVITY = 500
-export const MAX_NOTE_CHARS = 1000
+// A note can hold a whole saved answer.
+export const MAX_NOTE_CHARS = 20_000
 export const MAX_NOTES = 500
 export const MAX_IMAGES = 200
 export const MAX_SAVED = 500
@@ -98,6 +123,30 @@ export const DEFAULT_SPACE = 'General'
 export function spaceName(space: string | undefined): string {
   const clean = (space ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_SPACE_CHARS)
   return clean || DEFAULT_SPACE
+}
+
+const NOTE_COLUMNS = 'id, list, text, done, created_at, expires_at'
+
+/** When a note kept for `days` from now expires: null for good. */
+function expiry(days: KeepDays): string | null {
+  return days === null ? null : new Date(Date.now() + days * 86_400_000).toISOString()
+}
+
+/** A conversation's title: its first question, on one line. */
+export function titleOf(messages: ConversationMessage[]): string {
+  const first = messages.find((m) => m.role === 'user')?.content ?? 'New conversation'
+  const line = first.replace(/\s+/g, ' ').trim()
+  return line.length > MAX_TITLE_CHARS ? `${line.slice(0, MAX_TITLE_CHARS - 1)}…` : line
+}
+
+/** Where a search matched: some words either side of the first hit. */
+export function snippetOf(messages: ConversationMessage[], words: string[]): string | undefined {
+  for (const m of messages) {
+    const text = m.content.replace(/\s+/g, ' ')
+    const at = text.toLowerCase().indexOf(words[0] as string)
+    if (at >= 0) return `${at > 40 ? '…' : ''}${text.slice(Math.max(0, at - 40), at + 80).trim()}${at + 80 < text.length ? '…' : ''}`
+  }
+  return undefined
 }
 
 export class AgentMemory extends DurableObject implements MemoryStore {
@@ -148,6 +197,13 @@ export class AgentMemory extends DurableObject implements MemoryStore {
           instructions TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS conversations (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          messages TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS activity (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           at TEXT NOT NULL,
@@ -165,27 +221,33 @@ export class AgentMemory extends DurableObject implements MemoryStore {
       if (!columns.some((c) => c.name === 'space')) {
         ctx.storage.sql.exec(`ALTER TABLE memories ADD COLUMN space TEXT NOT NULL DEFAULT '${DEFAULT_SPACE}'`)
       }
+      if (!columns.some((c) => c.name === 'question')) ctx.storage.sql.exec('ALTER TABLE memories ADD COLUMN question TEXT')
+      // Notes kept before notes expired are kept for good.
+      if (!ctx.storage.sql.exec<{ name: string }>('PRAGMA table_info(notes)').toArray().some((c) => c.name === 'expires_at')) {
+        ctx.storage.sql.exec('ALTER TABLE notes ADD COLUMN expires_at TEXT')
+      }
     })
   }
 
-  async remember(text: string, space?: string): Promise<Memory> {
+  async remember(text: string, space?: string, question?: string): Promise<Memory> {
     const sql = this.ctx.storage.sql
-    const clean = text.trim().slice(0, MAX_MEMORY_CHARS)
+    const asked = question?.trim().slice(0, MAX_QUESTION_CHARS) || null
+    const clean = text.trim().slice(0, asked ? MAX_ANSWER_CHARS : MAX_MEMORY_CHARS)
     const filed = spaceName(space)
     const createdAt = new Date().toISOString()
-    const row = sql.exec<{ id: number }>('INSERT INTO memories (text, space, created_at) VALUES (?, ?, ?) RETURNING id', clean, filed, createdAt).one()
+    const row = sql.exec<{ id: number }>('INSERT INTO memories (text, space, question, created_at) VALUES (?, ?, ?, ?) RETURNING id', clean, filed, asked, createdAt).one()
     // The oldest go first once the store is full, so it never grows unbounded.
     sql.exec('DELETE FROM memories WHERE id NOT IN (SELECT id FROM memories ORDER BY id DESC LIMIT ?)', MAX_MEMORIES)
-    return { id: row.id, text: clean, space: filed, createdAt }
+    return { id: row.id, text: clean, space: filed, question: asked, createdAt }
   }
 
   async recall(query: string, limit = 10): Promise<Memory[]> {
     const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 1).slice(0, 8)
     if (words.length === 0) return this.listMemories(limit)
     // A word matches a memory's text or the name of its space.
-    const where = words.map(() => "lower(text || ' ' || space) LIKE ? ESCAPE '\\'").join(' OR ')
+    const where = words.map(() => "lower(text || ' ' || space || ' ' || coalesce(question, '')) LIKE ? ESCAPE '\\'").join(' OR ')
     const args = words.map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
-    return this.rows(`SELECT id, text, space, created_at FROM memories WHERE ${where} ORDER BY id DESC LIMIT ?`, ...args, limit)
+    return this.rows(`SELECT id, text, space, question, created_at FROM memories WHERE ${where} ORDER BY id DESC LIMIT ?`, ...args, limit)
   }
 
   async forget(id: number): Promise<boolean> {
@@ -193,12 +255,12 @@ export class AgentMemory extends DurableObject implements MemoryStore {
   }
 
   async moveMemory(id: number, space: string): Promise<Memory | null> {
-    const moved = this.rows('UPDATE memories SET space = ? WHERE id = ? RETURNING id, text, space, created_at', spaceName(space), id)
+    const moved = this.rows('UPDATE memories SET space = ? WHERE id = ? RETURNING id, text, space, question, created_at', spaceName(space), id)
     return moved[0] ?? null
   }
 
   async listMemories(limit = 50): Promise<Memory[]> {
-    return this.rows('SELECT id, text, space, created_at FROM memories ORDER BY id DESC LIMIT ?', limit)
+    return this.rows('SELECT id, text, space, question, created_at FROM memories ORDER BY id DESC LIMIT ?', limit)
   }
 
   async addModel(model: StoredModel): Promise<StoredModel> {
@@ -298,41 +360,68 @@ export class AgentMemory extends DurableObject implements MemoryStore {
 
   // NOTES AND TO-DOS: the owner's lists. A list is just a name on its notes;
   // the oldest go first once there are MAX_NOTES.
-  async addNote(text: string, list?: string): Promise<Note> {
+  async addNote(text: string, list?: string, keepDays: KeepDays = KEEP_DAYS): Promise<Note> {
     const sql = this.ctx.storage.sql
+    this.dropExpired()
     const clean = text.trim().slice(0, MAX_NOTE_CHARS)
     const name = listName(list)
     const createdAt = new Date().toISOString()
-    const { id } = sql.exec<{ id: number }>('INSERT INTO notes (list, text, done, created_at) VALUES (?, ?, 0, ?) RETURNING id', name, clean, createdAt).one()
+    const expiresAt = expiry(keepDays)
+    const { id } = sql.exec<{ id: number }>('INSERT INTO notes (list, text, done, created_at, expires_at) VALUES (?, ?, 0, ?, ?) RETURNING id', name, clean, createdAt, expiresAt).one()
     sql.exec('DELETE FROM notes WHERE id NOT IN (SELECT id FROM notes ORDER BY id DESC LIMIT ?)', MAX_NOTES)
-    return { id, list: name, text: clean, done: false, createdAt }
+    await this.wakeForExpiry()
+    return { id, list: name, text: clean, done: false, createdAt, expiresAt }
   }
 
-  /** Open notes before done ones, each list's oldest first. */
+  /** Open notes before done ones, each list's oldest first. Expired ones are gone. */
   async listNotes(list?: string): Promise<Note[]> {
+    this.dropExpired()
     const where = list ? 'WHERE list = ?' : ''
-    return this.notes(`SELECT id, list, text, done, created_at FROM notes ${where} ORDER BY done, list, id LIMIT 300`, ...(list ? [listName(list)] : []))
+    return this.notes(`SELECT ${NOTE_COLUMNS} FROM notes ${where} ORDER BY done, list, id LIMIT 300`, ...(list ? [listName(list)] : []))
   }
 
   async updateNote(id: number, change: NoteChange): Promise<Note | null> {
+    this.dropExpired()
     const sets: string[] = []
-    const args: (string | number)[] = []
+    const args: (string | number | null)[] = []
     if (change.text !== undefined) sets.push('text = ?'), args.push(change.text.trim().slice(0, MAX_NOTE_CHARS))
     if (change.list !== undefined) sets.push('list = ?'), args.push(listName(change.list))
     if (change.done !== undefined) sets.push('done = ?'), args.push(change.done ? 1 : 0)
-    if (sets.length === 0) return this.notes('SELECT id, list, text, done, created_at FROM notes WHERE id = ?', id)[0] ?? null
-    return this.notes(`UPDATE notes SET ${sets.join(', ')} WHERE id = ? RETURNING id, list, text, done, created_at`, ...args, id)[0] ?? null
+    if (change.keepDays !== undefined) sets.push('expires_at = ?'), args.push(expiry(change.keepDays))
+    if (sets.length === 0) return this.notes(`SELECT ${NOTE_COLUMNS} FROM notes WHERE id = ?`, id)[0] ?? null
+    const note = this.notes(`UPDATE notes SET ${sets.join(', ')} WHERE id = ? RETURNING ${NOTE_COLUMNS}`, ...args, id)[0] ?? null
+    if (change.keepDays !== undefined) await this.wakeForExpiry()
+    return note
+  }
+
+  // EXPIRY: a note past its time is deleted — when the notes are next read
+  // or written, and by the object's alarm, set for the next note to expire,
+  // so one is gone on time even if nobody looks.
+  private dropExpired(): void {
+    this.ctx.storage.sql.exec('DELETE FROM notes WHERE expires_at IS NOT NULL AND expires_at <= ?', new Date().toISOString())
+  }
+
+  private async wakeForExpiry(): Promise<void> {
+    const next = this.ctx.storage.sql.exec<{ at: string | null }>('SELECT min(expires_at) AS at FROM notes WHERE expires_at IS NOT NULL').toArray()[0]?.at
+    // The tests' storage has no alarm; the runtime's always does.
+    const storage = this.ctx.storage as Partial<DurableObjectStorage>
+    if (next && storage.setAlarm) await storage.setAlarm(new Date(next).getTime() + 1000)
+  }
+
+  async alarm(): Promise<void> {
+    this.dropExpired()
+    await this.wakeForExpiry()
   }
 
   async deleteNote(id: number): Promise<boolean> {
     return this.ctx.storage.sql.exec('DELETE FROM notes WHERE id = ?', id).rowsWritten > 0
   }
 
-  private notes(query: string, ...args: (string | number)[]): Note[] {
+  private notes(query: string, ...args: (string | number | null)[]): Note[] {
     return this.ctx.storage.sql
-      .exec<{ id: number; list: string; text: string; done: number; created_at: string }>(query, ...args)
+      .exec<{ id: number; list: string; text: string; done: number; created_at: string; expires_at: string | null }>(query, ...args)
       .toArray()
-      .map((r) => ({ id: r.id, list: r.list, text: r.text, done: r.done === 1, createdAt: r.created_at }))
+      .map((r) => ({ id: r.id, list: r.list, text: r.text, done: r.done === 1, createdAt: r.created_at, expiresAt: r.expires_at }))
   }
 
   // THE LIBRARY: images the agent drew (the newest MAX_IMAGES kept), and
@@ -383,11 +472,65 @@ export class AgentMemory extends DurableObject implements MemoryStore {
     return this.ctx.storage.sql.exec('DELETE FROM saved WHERE id = ?', id).rowsWritten > 0
   }
 
+  // CONVERSATIONS: the newest MAX_CONVERSATIONS, each saved whole on every
+  // turn (the page sends it after each answer). One too big to keep sheds its
+  // oldest messages.
+  async saveConversation(id: string, messages: ConversationMessage[], title?: string): Promise<ConversationSummary> {
+    const sql = this.ctx.storage.sql
+    let kept = messages
+    let body = JSON.stringify(kept)
+    while (body.length > MAX_CONVERSATION_BYTES && kept.length > 1) {
+      kept = kept.slice(Math.ceil(kept.length / 10))
+      body = JSON.stringify(kept)
+    }
+    const named = (title ?? '').trim() || titleOf(messages)
+    const now = new Date().toISOString()
+    sql.exec(
+      `INSERT INTO conversations (id, title, messages, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET title = excluded.title, messages = excluded.messages, updated_at = excluded.updated_at`,
+      id,
+      named,
+      body,
+      now,
+      now,
+    )
+    sql.exec('DELETE FROM conversations WHERE id NOT IN (SELECT id FROM conversations ORDER BY updated_at DESC LIMIT ?)', MAX_CONVERSATIONS)
+    return { id, title: named, updatedAt: now }
+  }
+
+  async getConversation(id: string): Promise<Conversation | null> {
+    const row = this.ctx.storage.sql
+      .exec<{ id: string; title: string; messages: string; updated_at: string }>('SELECT id, title, messages, updated_at FROM conversations WHERE id = ?', id)
+      .toArray()[0]
+    return row ? { id: row.id, title: row.title, updatedAt: row.updated_at, messages: JSON.parse(row.messages) as ConversationMessage[] } : null
+  }
+
+  /** The newest first; with a query, those whose title or words hold every word of it, each with where it matched. */
+  async listConversations(query = '', limit = 20): Promise<ConversationSummary[]> {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6)
+    if (!words.length) {
+      return this.ctx.storage.sql
+        .exec<{ id: string; title: string; updated_at: string }>('SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?', limit)
+        .toArray()
+        .map((r) => ({ id: r.id, title: r.title, updatedAt: r.updated_at }))
+    }
+    const where = words.map(() => "lower(title || ' ' || messages) LIKE ? ESCAPE '\\'").join(' AND ')
+    const args = words.map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
+    return this.ctx.storage.sql
+      .exec<{ id: string; title: string; messages: string; updated_at: string }>(`SELECT id, title, messages, updated_at FROM conversations WHERE ${where} ORDER BY updated_at DESC LIMIT ?`, ...args, limit)
+      .toArray()
+      .map((r) => ({ id: r.id, title: r.title, updatedAt: r.updated_at, snippet: snippetOf(JSON.parse(r.messages) as ConversationMessage[], words) }))
+  }
+
+  async deleteConversation(id: string): Promise<boolean> {
+    return this.ctx.storage.sql.exec('DELETE FROM conversations WHERE id = ?', id).rowsWritten > 0
+  }
+
   private rows(query: string, ...args: (string | number)[]): Memory[] {
     return this.ctx.storage.sql
-      .exec<{ id: number; text: string; space: string; created_at: string }>(query, ...args)
+      .exec<{ id: number; text: string; space: string; question: string | null; created_at: string }>(query, ...args)
       .toArray()
-      .map((r) => ({ id: r.id, text: r.text, space: r.space, createdAt: r.created_at }))
+      .map((r) => ({ id: r.id, text: r.text, space: r.space, question: r.question ?? null, createdAt: r.created_at }))
   }
 }
 

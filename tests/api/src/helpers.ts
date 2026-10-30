@@ -198,7 +198,14 @@ export async function webStandIn() {
   const server: Server = createServer(async (req, res) => {
     const raw = await body(req);
     const url = new URL(req.url ?? "/", "http://x");
-    calls.push({ method: req.method ?? "", path: url.pathname + url.search, auth: String(req.headers.authorization ?? ""), body: raw ? JSON.parse(raw) : undefined });
+    const parsed = (() => {
+      try {
+        return raw ? JSON.parse(raw) : undefined;
+      } catch {
+        return raw; // a form, as Overpass takes
+      }
+    })();
+    calls.push({ method: req.method ?? "", path: url.pathname + url.search, auth: String(req.headers.authorization ?? ""), body: parsed });
     const send = (status: number, type: string, b: string) => {
       res.writeHead(status, { "content-type": type });
       res.end(b);
@@ -245,6 +252,29 @@ export async function webStandIn() {
     }
     if (url.pathname === "/lookup/openalex/works/doi%3A10.1234%2Fw1" || url.pathname === "/lookup/openalex/works/W1") return lookup({ ...W("W1", "RAG", 2020, 3046), referenced_works_count: 60, type: "article" });
     if (url.pathname.startsWith("/lookup/openalex/works/")) return send(404, "application/json", "{}");
+    // OpenStreetMap: Nominatim's search, FOSSGIS's OSRM routes, Overpass.
+    if (url.pathname === "/lookup/nominatim/search") {
+      const q = url.searchParams.get("q") ?? "";
+      if (q.startsWith("Nowhere")) return lookup([]);
+      const at: Record<string, [string, string]> = { "Fort Kochi": ["9.9658", "76.2421"], Munnar: ["10.0889", "77.0595"] };
+      const [lat, lon] = at[q.split(",")[0] ?? ""] ?? ["9.9312", "76.2673"];
+      return lookup([{ lat, lon, display_name: `${q.split(",")[0]}, Ernakulam, Kerala, India`, type: "city" }]);
+    }
+    if (url.pathname.startsWith("/lookup/osrm/")) {
+      const profile = url.pathname.split("/")[3];
+      return lookup({ code: "Ok", routes: [{ distance: 128_400, duration: profile === "routed-foot" ? 95_000 : 13_500, geometry: { coordinates: [[76.2421, 9.9658], [76.6, 10.0], [77.0595, 10.0889]] } }] });
+    }
+    if (url.pathname === "/lookup/overpass/interpreter") {
+      const data = new URLSearchParams(raw).get("data") ?? "";
+      if (!data.includes('"amenity"="restaurant"')) return lookup({ elements: [] });
+      return lookup({
+        elements: [
+          { type: "node", id: 1, lat: 9.966, lon: 76.243, tags: { name: "Kashi Art Cafe", cuisine: "cafe;regional", "addr:street": "Burgher Street", opening_hours: "08:30-19:30", website: "https://kashi.example" } },
+          { type: "way", id: 2, center: { lat: 9.967, lon: 76.244 }, tags: { name: "Fort House" } },
+          { type: "node", id: 3, lat: 9.968, lon: 76.245, tags: {} },
+        ],
+      });
+    }
     if (url.pathname === "/big") return send(200, "text/plain", "x".repeat(50_000));
     if (url.pathname === "/file.pdf") return send(200, "application/pdf", "%PDF-1.4");
     if (url.pathname === "/search") {

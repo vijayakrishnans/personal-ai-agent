@@ -63,11 +63,12 @@ export const BUILT_IN_SKILLS: Skill[] = [
   },
   {
     name: 'trip-planner',
-    description: 'Plan a trip: weather, places, costs in local currency, and a checklist.',
-    instructions: `1. Ask for what is missing among: where, when, how long, budget. Then go on.
-2. \`weather\` for the destination; \`wikipedia\` for the place and two or three sights; \`exchangeRate\` if the currency differs from the owner's.
-3. Give a day-by-day plan, a rough budget worked out with \`calculate\`, and a packing and booking checklist.
-4. Offer to save the checklist as notes. You cannot add notes in the same turn you read the web, so ask the owner to say "save it" and add them then.`,
+    description: 'Plan a trip: getting there, where to stay and eat, what to see, on a map, with weather, costs and a checklist.',
+    instructions: `1. Ask for what is missing among: from where, to where, when, how long, budget, how they travel. Then go on.
+2. \`route\` from home to the destination (by car unless they say otherwise): distance, time, and the way on a map.
+3. \`weather\` for the destination; \`wikipedia\` for the place; \`places\` for its sights (attraction, museum, viewpoint, beach) and, if they need them, hotels and restaurants. \`exchangeRate\` if the currency differs from the owner's.
+4. Give a day-by-day plan that groups sights that are close together, with \`showMap\` for the plan's stops, a rough budget worked out with \`calculate\`, and a packing and booking checklist.
+5. Offer to save the checklist as notes. You cannot add notes in the same turn you read the web, so ask the owner to say "save it" and add them then.`,
   },
   {
     name: 'decision-helper',

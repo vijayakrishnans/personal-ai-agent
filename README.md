@@ -125,6 +125,9 @@ and a sleeping Space wakes on the first call, which can take a while.
 | `books` | books on Open Library |
 | `readPage` | reads a web page at a URL as text |
 | `webSearch` | searches the web (only once `TAVILY_API_KEY` is stored) |
+| `showMap` | shows places on a map under the answer |
+| `route` | distance, time and the way between two places, by car, on foot or by bike |
+| `places` | restaurants, hotels, sights, pharmacies and more near a place |
 | `useSkill` | loads a skill's instructions when a request matches it |
 | `generateImage` | draws a picture and shows it in the chat |
 
@@ -133,22 +136,29 @@ prompt. Only a model that calls tools can save new ones. Spaces see your
 message alone. The store keeps the newest 500.
 
 Every fact is filed under a **space**, a topic the agent picks when it
-remembers (it reuses one that fits) and `General` when none is named. The
-sidebar lists them by space and lets you delete one; its **‹ Collapse** at
-the bottom folds it away. Settings (☰) → **Knowledge** draws them as a graph:
-you in the centre, each space a hub, each fact around its hub. Click a fact to
-move it to another space or remove it, click a space to rename it, or add a
-fact yourself. **The conversation itself stays in your browser**
-(localStorage), and the Worker stores nothing of what was said. **New chat**
-clears it.
+remembers (it reuses one that fits) and `General` when none is named.
+Settings (☰) → **Knowledge** draws them as a graph: you in the centre, each
+space a hub, each fact around its hub. Click a fact to move it to another
+space or remove it, click a space to rename it, or add a fact yourself.
+
+## Conversations
+
+Every conversation is saved with the agent after each answer, with any
+secret already taken out. The sidebar shows the **latest four** (**Show more**
+for the rest) under a **search box** that finds a conversation by any words
+in its title or in what was said, and shows where it matched. Click one to
+carry on with it, or **✕** to delete it. **New chat** starts a fresh one;
+**‹ Collapse** at the bottom folds the sidebar away. The newest 300 are kept.
 
 ## Notes, numbers and pictures
 
-- **Notes and to-dos.** Ask it to "add cardamom to my groceries" or to
-  "remind me to renew my passport". It keeps lists such as Groceries, To do
-  and Ideas, and ticks items off when you say so. Settings (☰) → **Notes**
-  shows every list: tick items off, remove them or add one yourself. Facts
-  about you still go in its memory; notes are things to act on.
+- **Notes and to-dos, short-lived.** Ask it to "add cardamom to my
+  groceries", or save an answer as a note. It keeps lists such as Groceries,
+  To do and Ideas, and ticks items off when you say so. **A note goes after 2
+  days** unless you keep it for 7, for good, or move it to the knowledge.
+  Settings (☰) → **Notes** shows when each one goes, with a menu to keep it
+  longer and a **To knowledge** button. Facts about you still go in its
+  memory; notes are things to act on.
 - **Calculator.** Every sum is worked out by a small parser of its own, never
   by running code: `+ - * / ^`, parentheses, `18% of 2500`, `2500 + 18%`,
   `sqrt`, `round`, `min`, `max`, `log`, `pi`. So a bill split or an EMI comes
@@ -202,18 +212,42 @@ orun secrets set OPENALEX_API_KEY --org <ws> --env prod
 
 ## Your library, and keeping what matters
 
-Under every message there are three buttons:
+Under every message:
 
 - **Copy** copies its text.
-- **Add to knowledge** opens it as a memory you trim first (500 characters
-  at most), in a space you choose. The agent then knows it in every
-  conversation, and it appears in the knowledge graph.
-- **Save** (under an answer) keeps the whole answer in your library. Saved
-  answers are never put in a prompt; they're yours to reread and copy.
+- **Add to knowledge** keeps an answer **as the conversation it was**: what
+  you asked and what it answered (up to 4,000 characters), in a space you
+  choose. The agent sees the question and the start of the answer in every
+  chat, and looks up the rest with `recall`. Your own message is kept as one
+  fact (500 characters at most).
+- **Save** asks how to keep it: a **note for 2 days** (the default), a **note
+  for 7 days**, the **knowledge** (for good), or the **library** (kept whole,
+  for you alone; never put in a prompt).
+- **Screenshot** (under an answer) draws your question and the answer, with
+  its pictures, as a PNG. It downloads, and is copied to the clipboard when
+  the browser allows.
 
 Settings (☰) → **Library** holds every image the agent drew (the newest 200,
-each with its prompt and model, to download or delete) and every answer you
-saved (the newest 500).
+each with its prompt and model, to download or delete) and every answer kept
+whole (the newest 500).
+
+## The Tools menu, maps and travel
+
+**+ Tools** beside the input asks the agent to use one tool for your next
+message: Web search, Research papers, News, Wikipedia, Weather, Map, Plan a
+trip, Draw an image or Calculate. It shows as a chip above the input
+(**✕** drops it). The agent is told which you chose; it still decides how.
+
+Maps come from **OpenStreetMap**, with no key. `showMap` finds places by name
+(Nominatim), `route` gives the distance and time by car, on foot or by bike
+(FOSSGIS's OSRM), with a link to turn-by-turn directions, and `places` finds
+restaurants, cafes, hotels, sights, museums, beaches, pharmacies, ATMs, fuel
+and more near a place (Overpass). The page draws the map itself from
+OpenStreetMap's tiles: the places numbered, the route as a line, zoom
+buttons, and the places listed with their links, hours and websites. The
+built-in **trip-planner** skill uses all three. A map is the only thing the
+page loads from outside the Worker. OpenStreetMap's data is edited by anyone,
+so its tools count as reading the web.
 
 ## The news and the web
 
@@ -306,17 +340,18 @@ Two ways to stop the agent, both reversible:
 
 | Route | Answers |
 |---|---|
-| `GET /` | the agent's page: chat, model picker, added models, memories |
-| `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…]}` → `{"text", "model", "tools"}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
+| `GET /` | the agent's page: chat, conversations, model picker, settings |
+| `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…], "mode"?: "web"\|"research"\|"news"\|"wikipedia"\|"weather"\|"map"\|"travel"\|"image"\|"calculate"}` → `{"text", "model", "tools", "images"?, "maps"?}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
+| `GET /api/conversations` (`?q=`, `?limit=`), `GET`/`PUT`/`DELETE /api/conversations/<id>` (`{messages, title?}`) | your conversations: the newest first, or those a search finds; one opened, saved (secrets taken out) or deleted |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
-| `GET /api/notes`, `POST /api/notes` (`{text, list?}`), `PATCH /api/notes/<id>` (`{done?, text?, list?}`), `DELETE /api/notes/<id>` | your notes and to-dos |
+| `GET /api/notes`, `POST /api/notes` (`{text, list?, keepDays?: 2\|7\|null}`), `PATCH /api/notes/<id>` (`{done?, text?, list?, keepDays?}`), `DELETE /api/notes/<id>` | your notes and to-dos; each expires `keepDays` from now (2 by default), `null` for good |
 | `GET /api/images/<id>` | an image the agent drew (JPEG or PNG) |
 | `GET /api/images`, `DELETE /api/images/<id>` | the library's images |
 | `GET /api/saved`, `POST /api/saved` (`{text, source?}`), `DELETE /api/saved/<id>` | saved answers |
 | `GET /api/skills`, `PUT /api/skills/<name>` (`{description, instructions}`), `DELETE /api/skills/<name>` | the skills, built in and your own |
 | `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
 | `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?}`) | the pause, and which model draws images |
-| `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
+| `GET /api/memories`, `POST /api/memories` (`{text, space?, question?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
 | `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |
 

@@ -4,11 +4,24 @@ import { runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
 import { API_NAME } from './identity'
-import { memoryOf, MAX_MEMORY_CHARS, MAX_NOTE_CHARS, MAX_SAVED_CHARS, MAX_SPACE_CHARS, type MemoryStore, type NoteChange } from './memory'
+import {
+  memoryOf,
+  MAX_ANSWER_CHARS,
+  MAX_MEMORY_CHARS,
+  MAX_NOTE_CHARS,
+  MAX_QUESTION_CHARS,
+  MAX_SAVED_CHARS,
+  MAX_SPACE_CHARS,
+  MAX_TITLE_CHARS,
+  type ConversationMessage,
+  type KeepDays,
+  type MemoryStore,
+  type NoteChange,
+} from './memory'
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, imageModel, imageType } from './images'
-import { hasSecret } from './secrets'
+import { hasSecret, redact } from './secrets'
 import { BUILT_IN_SKILLS, MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, SKILL_NAME, skillsOnOffer } from './skills'
 import { page } from './ui'
 import { webSearchConnected } from './web'
@@ -141,16 +154,20 @@ app.get('/api/memories', async (c) => {
   return c.json({ memories: await c.var.memory.listMemories(100) })
 })
 
+// A memory is one fact, or — with `question` — what the owner asked and the
+// answer they kept.
 app.post('/api/memories', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { text?: unknown; space?: unknown } | null
+  const body = (await c.req.json().catch(() => null)) as { text?: unknown; space?: unknown; question?: unknown } | null
   const text = typeof body?.text === 'string' ? body.text.trim() : ''
-  if (!text || text.length > MAX_MEMORY_CHARS) {
-    return c.json({ ok: false, error: 'invalid_memory', message: `one fact of 1-${MAX_MEMORY_CHARS} characters` }, 400)
+  const question = typeof body?.question === 'string' ? body.question.trim() : ''
+  const max = question ? MAX_ANSWER_CHARS : MAX_MEMORY_CHARS
+  if (!text || text.length > max || question.length > MAX_QUESTION_CHARS || (body?.question !== undefined && typeof body.question !== 'string')) {
+    return c.json({ ok: false, error: 'invalid_memory', message: `one fact of 1-${MAX_MEMORY_CHARS} characters, or a question of up to ${MAX_QUESTION_CHARS} with an answer of 1-${MAX_ANSWER_CHARS}` }, 400)
   }
   const space = spaceParam(body?.space)
   if (space === null) return c.json(INVALID_SPACE, 400)
-  if (hasSecret(text) || hasSecret(space ?? '')) return c.json(LOOKS_LIKE_SECRET, 400)
-  return c.json({ ok: true, memory: await c.var.memory.remember(text, space) }, 201)
+  if (hasSecret(text) || hasSecret(question) || hasSecret(space ?? '')) return c.json(LOOKS_LIKE_SECRET, 400)
+  return c.json({ ok: true, memory: await c.var.memory.remember(text, space, question || undefined) }, 201)
 })
 
 // Moving a memory to another space — the page's graph does it.
@@ -173,7 +190,9 @@ app.delete('/api/memories/:id', async (c) => {
 
 // NOTES AND TO-DOS: the owner's lists, which the page shows and edits as the
 // agent does — a note that looks like a secret is refused here too.
-const INVALID_NOTE = { ok: false, error: 'invalid_note', message: `a note of 1-${MAX_NOTE_CHARS} characters, on a list of 1-${MAX_SPACE_CHARS}` }
+const INVALID_NOTE = { ok: false, error: 'invalid_note', message: `a note of 1-${MAX_NOTE_CHARS} characters, on a list of 1-${MAX_SPACE_CHARS}, kept for keepDays 2, 7 or null (for good)` }
+/** How long to keep a note, as a request sends it: absent is undefined, a bad one false. */
+const keepParam = (keep: unknown): KeepDays | undefined | false => (keep === undefined ? undefined : keep === 2 || keep === 7 || keep === null ? keep : false)
 const noteId = (raw: string) => {
   const id = Number(raw)
   return Number.isInteger(id) && id > 0 ? id : null
@@ -182,12 +201,13 @@ const noteId = (raw: string) => {
 app.get('/api/notes', async (c) => c.json({ ok: true, notes: await c.var.memory.listNotes() }))
 
 app.post('/api/notes', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { text?: unknown; list?: unknown } | null
+  const body = (await c.req.json().catch(() => null)) as { text?: unknown; list?: unknown; keepDays?: unknown } | null
   const text = typeof body?.text === 'string' ? body.text.trim() : ''
   const list = body?.list === undefined ? undefined : typeof body.list === 'string' ? body.list.trim() : null
-  if (!text || text.length > MAX_NOTE_CHARS || list === null || (list !== undefined && list.length > MAX_SPACE_CHARS)) return c.json(INVALID_NOTE, 400)
+  const keep = keepParam(body?.keepDays)
+  if (!text || text.length > MAX_NOTE_CHARS || list === null || (list !== undefined && list.length > MAX_SPACE_CHARS) || keep === false) return c.json(INVALID_NOTE, 400)
   if (hasSecret(text) || hasSecret(list ?? '')) return c.json(LOOKS_LIKE_SECRET, 400)
-  return c.json({ ok: true, note: await c.var.memory.addNote(text, list || undefined) }, 201)
+  return c.json({ ok: true, note: await c.var.memory.addNote(text, list || undefined, keep) }, 201)
 })
 
 app.patch('/api/notes/:id', async (c) => {
@@ -198,6 +218,9 @@ app.patch('/api/notes/:id', async (c) => {
   if (typeof body?.done === 'boolean') change.done = body.done
   if (typeof body?.text === 'string' && body.text.trim() && body.text.length <= MAX_NOTE_CHARS) change.text = body.text
   if (typeof body?.list === 'string' && body.list.trim() && body.list.length <= MAX_SPACE_CHARS) change.list = body.list
+  const keep = keepParam(body?.keepDays)
+  if (keep === false) return c.json(INVALID_NOTE, 400)
+  if (keep !== undefined) change.keepDays = keep
   if (Object.keys(change).length === 0) return c.json(INVALID_NOTE, 400)
   if (hasSecret(`${change.text ?? ''} ${change.list ?? ''}`)) return c.json(LOOKS_LIKE_SECRET, 400)
   const note = await c.var.memory.updateNote(id, change)
@@ -207,6 +230,47 @@ app.patch('/api/notes/:id', async (c) => {
 app.delete('/api/notes/:id', async (c) => {
   const id = noteId(c.req.param('id'))
   return id && (await c.var.memory.deleteNote(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+// CONVERSATIONS: the owner's, as the page saves them after every answer —
+// listed newest first or searched (the sidebar), opened, deleted. What is
+// kept has every secret taken out first, whatever the page sent.
+const CONVERSATION_ID = /^[A-Za-z0-9_-]{8,64}$/
+const SavedMessage = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string().max(MAX_SAVED_CHARS),
+  meta: z.string().max(400).optional(),
+  error: z.boolean().optional(),
+  images: z.array(z.object({ id: z.number().int().positive(), prompt: z.string().max(2000) })).max(8).optional(),
+  maps: z.array(z.record(z.string(), z.unknown())).max(4).optional(),
+})
+const SaveConversation = z.object({ title: z.string().max(MAX_TITLE_CHARS).optional(), messages: z.array(SavedMessage).min(1).max(400) })
+
+app.get('/api/conversations', async (c) => {
+  const q = (c.req.query('q') ?? '').slice(0, 200)
+  const limit = Math.min(50, Math.max(1, Number(c.req.query('limit')) || 20))
+  return c.json({ ok: true, conversations: await c.var.memory.listConversations(q, limit) })
+})
+
+app.get('/api/conversations/:id', async (c) => {
+  const id = c.req.param('id')
+  const conversation = CONVERSATION_ID.test(id) ? await c.var.memory.getConversation(id) : null
+  return conversation ? c.json({ ok: true, conversation }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+app.put('/api/conversations/:id', async (c) => {
+  const id = c.req.param('id')
+  if (!CONVERSATION_ID.test(id)) return c.json({ ok: false, error: 'not_found' }, 404)
+  const parsed = SaveConversation.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) return c.json({ ok: false, error: 'invalid_conversation', message: parsed.error.issues.map((i) => i.message).join('; ') }, 400)
+  const messages = parsed.data.messages.map((m) => ({ ...m, content: redact(m.content).text })) as ConversationMessage[]
+  const title = parsed.data.title === undefined ? undefined : redact(parsed.data.title).text
+  return c.json({ ok: true, conversation: await c.var.memory.saveConversation(id, messages, title) })
+})
+
+app.delete('/api/conversations/:id', async (c) => {
+  const id = c.req.param('id')
+  return CONVERSATION_ID.test(id) && (await c.var.memory.deleteConversation(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
 // THE LIBRARY: the images the agent drew, and what the owner saved — behind
@@ -310,7 +374,7 @@ app.post('/api/chat', async (c) => {
   if (await c.var.memory.isPaused()) return c.json(PAUSED, 503)
   const parsed = ChatRequest.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ ok: false, error: 'invalid_chat', message: parsed.error.issues.map((i) => i.message).join('; ') }, 400)
-  const { model = modelKey('workers-ai', DEFAULT_MODEL), messages } = parsed.data
+  const { model = modelKey('workers-ai', DEFAULT_MODEL), messages, mode } = parsed.data
   if (messages[messages.length - 1]?.role !== 'user') {
     return c.json({ ok: false, error: 'invalid_chat', message: 'the last message must be the owner’s' }, 400)
   }
@@ -320,7 +384,7 @@ app.post('/api/chat', async (c) => {
   if (entry.provider === 'huggingface' && !huggingfaceConnected(c.env)) return c.json(HF_NOT_CONNECTED, 409)
 
   try {
-    return c.json({ ok: true, ...(await runAgent({ env: c.env, entry, messages, memory: c.var.memory })) })
+    return c.json({ ok: true, ...(await runAgent({ env: c.env, entry, messages, memory: c.var.memory, mode })) })
   } catch (error) {
     // The model's provider failed, not this Worker: say which. The message
     // is the provider's own; it carries no key of ours.
@@ -357,7 +421,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: toolNames(env),
-    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', saved: '/api/saved', skills: '/api/skills', state: '/api/state', activity: '/api/activity', health: '/health' },
+    endpoints: { chat: '/api/chat', conversations: '/api/conversations', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', saved: '/api/saved', skills: '/api/skills', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 
