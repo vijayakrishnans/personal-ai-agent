@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { chosenModes, runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
+import { forgetHfToken, HF_TOKEN_PATTERN, hfToken, storeHfToken, type HfTokenSource } from './vault'
 import { API_NAME } from './identity'
 import {
   memoryOf,
@@ -29,7 +30,7 @@ import { webSearchConnected } from './web'
 
 export { AgentMemory } from './memory'
 
-type Vars = { memory: MemoryStore }
+type Vars = { memory: MemoryStore; hfSource: HfTokenSource }
 type AppContext = Context<{ Bindings: Env; Variables: Vars }>
 const app = new Hono<{ Bindings: Env; Variables: Vars }>()
 
@@ -52,7 +53,7 @@ const PAUSED = {
 const HF_NOT_CONNECTED = {
   ok: false,
   error: 'huggingface_not_connected',
-  message: 'Hugging Face models need HF_TOKEN stored as this environment’s secret, then a redeploy (README → Add Hugging Face models).',
+  message: 'Hugging Face models need a Hugging Face token: paste one in Settings → Models, or store HF_TOKEN as this environment’s secret and redeploy (README → Add Hugging Face models).',
 }
 
 // THE OWNER'S DOOR, before anything under /api does any work: the hard kill
@@ -68,6 +69,10 @@ app.use('/api/*', async (c, next) => {
     return c.json({ ok: false, error: 'unauthorized', message: 'Send the agent’s access key as a bearer token.' }, 401)
   }
   c.set('memory', memoryOf(c.env.MEMORY))
+  // A token pasted in the page stands in for HF_TOKEN, for this request only.
+  const hf = await hfToken(c.env, c.var.memory)
+  c.set('hfSource', hf.source)
+  if (hf.source === 'app') c.env = { ...c.env, HF_TOKEN: hf.token }
   return next()
 })
 
@@ -77,10 +82,29 @@ app.get('/api/models', async (c) => {
   return c.json({
     default: modelKey('workers-ai', DEFAULT_MODEL),
     huggingface: huggingfaceConnected(c.env),
+    hfToken: c.var.hfSource,
     models: await models(c),
     images: { models: IMAGE_MODELS, default: DEFAULT_IMAGE_MODEL },
     music: { models: MUSIC_MODELS.map(({ id, label }) => ({ id, label })), default: DEFAULT_MUSIC_MODEL },
   })
+})
+
+// THE HUGGING FACE TOKEN pasted in the page (vault.ts): stored sealed,
+// never sent back. HF_TOKEN stored as a secret wins, so then there is
+// nothing to set here.
+app.put('/api/hf-token', async (c) => {
+  if (c.var.hfSource === 'secret') return c.json({ ok: false, error: 'hf_token_is_a_secret', message: 'HF_TOKEN is stored as this environment’s secret, which wins; change it there.' }, 409)
+  const body = await c.req.json().catch(() => null)
+  const token = typeof body?.token === 'string' ? body.token.trim() : ''
+  if (!HF_TOKEN_PATTERN.test(token)) return c.json({ ok: false, error: 'invalid_token', message: 'That is not a Hugging Face access token (hf_ followed by letters and digits).' }, 400)
+  await storeHfToken(c.env, c.var.memory, token)
+  return c.json({ ok: true, hfToken: 'app' })
+})
+
+app.delete('/api/hf-token', async (c) => {
+  if (c.var.hfSource === 'secret') return c.json({ ok: false, error: 'hf_token_is_a_secret', message: 'HF_TOKEN is stored as this environment’s secret; remove it there and redeploy.' }, 409)
+  await forgetHfToken(c.var.memory)
+  return c.json({ ok: true, hfToken: null })
 })
 
 const AddModel = z.discriminatedUnion('provider', [

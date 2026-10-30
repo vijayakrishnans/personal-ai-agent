@@ -283,6 +283,11 @@ describe("the page's script", () => {
     expect(page("x")).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
   });
 
+  it("map tiles take no style meant for the sidebar's tiles (that drew black bars between them)", () => {
+    expect(script()).toContain("el('img', { className: 'map-tile'");
+    expect(script()).not.toContain("className: 'tile', alt");
+  });
+
   it("maps drag, pinch and go back to the start, and a drag is not a click on a pin", () => {
     expect(script()).toContain("box.addEventListener('pointermove'");
     expect(script()).toContain("title: 'Back to the start'");
