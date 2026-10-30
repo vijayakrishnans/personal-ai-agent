@@ -101,6 +101,9 @@ and a sleeping Space wakes on the first call, which can take a while.
 | `recall` | searches what it remembers, by words in a fact or its space |
 | `forget` | deletes a fact by its number |
 | `currentTime` | the date and time in UTC |
+| `news` | the latest headlines: top stories for a country, or news on a topic |
+| `readPage` | reads a web page at a URL as text |
+| `webSearch` | searches the web (only once `TAVILY_API_KEY` is stored) |
 
 Every model, tools or not, is told the 30 most recent facts in its system
 prompt. Only a model that calls tools can save new ones. Spaces see your
@@ -115,6 +118,35 @@ move it to another space or remove it, click a space to rename it, or add a
 fact yourself. **The conversation itself stays in your browser**
 (localStorage), and the Worker stores nothing of what was said. **New chat**
 clears it.
+
+## The news and the web
+
+The agent can look things up when you ask about something current. Nothing in
+the page changes. A reply that used the web names the tool in its footnote,
+such as *used news*, and says where the information came from.
+
+- **News** works from the first deploy, with no key. It reads Google News'
+  feed: the top stories for a country (the agent uses yours if it knows it),
+  or the news on any topic. The feed is for personal, non-commercial reading.
+- **Reading a page** works from the first deploy too. Give it a link, or let
+  it follow one it found. Pages are read as plain text and cut at 12,000
+  characters. Pages that need JavaScript to show their text, PDFs and Google
+  News' own article links cannot be read.
+- **Web search** needs a [Tavily](https://tavily.com) API key. Store it, then
+  redeploy:
+
+  ```bash
+  orun secrets set TAVILY_API_KEY --org <ws> --env prod
+  ```
+
+  `/health` then reports `"webSearch":"connected"`. The key is only ever sent
+  to Tavily.
+
+Only models that call tools can use the web: the built-in Workers AI models,
+and Hugging Face models with **Let it use the agent's tools** on. Whatever a
+page says is treated as information, never as instructions: the agent is told
+not to follow directions found on the web, or to remember or forget anything
+because a page said to.
 
 ## Kill switch
 
@@ -146,7 +178,7 @@ Two ways to stop the agent, both reversible:
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
 | `GET /api/state`, `PUT /api/state` (`{paused}`) | the pause: whether the agent is paused, and pausing or resuming it |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
-| `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
+| `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |
 
 Every `/api` route needs `Authorization: Bearer <AGENT_ACCESS_KEY>`. Without

@@ -16,7 +16,8 @@ describe("GET /health", () => {
       killSwitch: "off",
       huggingface: "not connected",
       models: { default: "workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai": 2, configured: 0 },
-      tools: ["remember", "recall", "forget", "currentTime"],
+      webSearch: "not connected",
+      tools: ["remember", "recall", "forget", "currentTime", "news", "readPage"],
       endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", state: "/api/state", health: "/health" },
     });
   });

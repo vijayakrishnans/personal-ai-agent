@@ -133,6 +133,9 @@ Caveats that matter:
     Providers models answer `409` without it, public Spaces do not need it;
   - `HF_MODELS` — the Hugging Face models and Spaces to offer from the start,
     comma-separated, a Space as `space:<owner>/<name>[#<endpoint>]`;
+  - `TAVILY_API_KEY` — web search: with it the agent is offered
+    `webSearch` (Tavily); without it, `news` (Google News RSS) and
+    `readPage` still work, keyless;
   - `AGENT_KILL_SWITCH` — the hard kill switch: `on` (true, 1, yes) and every
     `/api` route answers `503` to everyone, the owner too, until it is set
     `off` and the Worker redeployed.
@@ -170,6 +173,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | add a key | `orun secrets set <KEY> --org <ws> --env <env>` and deploy; a new key name is also declared in the component's `optionalSecretEnv` and named in `runtimeSecrets` |
 | remove a key from the Worker | `pnpm exec wrangler secret delete <KEY> --env <env>` from `apps/api` — a deploy never deletes one |
 | stop the agent now | pause it in the page (☰ → Access → Pause the agent): chat answers `503` and no model is called, no redeploy; Resume undoes it. If the key may have leaked: store `AGENT_KILL_SWITCH` = `on` and deploy, then rotate the key, set the switch `off` and deploy |
+| turn on web search | store `TAVILY_API_KEY` and deploy; `/health` answers `"webSearch":"connected"` (README, "The news and the web") |
 | rotate the access key | store a new `AGENT_ACCESS_KEY` and deploy; every browser holding the old one is asked again |
 | headless credentials | `ORUN_TOKEN` (workspace-scoped) + `GITHUB_TOKEN` |
 

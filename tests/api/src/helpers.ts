@@ -60,7 +60,7 @@ export type Asked = { model: string; tools: string[]; roles: string[]; system: s
 /**
  * A model that answers in the OpenAI chat-completions shape, deterministically:
  * a tool result is quoted, `remember: <fact>` (or `remember in <Space>: <fact>`)
- * becomes a `remember` call, and
+ * becomes a `remember` call, `call <tool> <json>` a call of any tool, and
  * anything else is echoed. Workers AI's binding and Hugging Face's router
  * both speak it; each records what it was asked.
  */
@@ -69,6 +69,13 @@ export function answer(messages: { role: string; content: unknown }[], tools: st
   const last = messages[messages.length - 1];
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
   if (last?.role === "tool") return { message: { role: "assistant", content: `Tool said: ${text(last.content)}` }, finish_reason: "stop" };
+  const call = /^call (\w+) (\{.*\})$/.exec(text(lastUser?.content));
+  if (call && tools.includes(call[1] ?? "")) {
+    return {
+      message: { role: "assistant", content: "", tool_calls: [{ id: `call_${messages.length}`, type: "function", function: { name: call[1], arguments: call[2] } }] },
+      finish_reason: "tool_calls",
+    };
+  }
   const fact = /^remember(?: in (\w+))?: (.+)$/.exec(text(lastUser?.content));
   if (fact && tools.includes("remember")) {
     const args = { fact: fact[2], ...(fact[1] ? { space: fact[1] } : {}) };
@@ -152,6 +159,46 @@ export async function hfStandIn() {
   const { port } = server.address() as AddressInfo;
   const url = `http://127.0.0.1:${port}`;
   return { router: `${url}/v1`, spaces: `${url}/spaces`, calls, asked, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
+
+export const TAVILY_KEY = "tvly-test-key";
+
+const RSS = (items: [string, string, string][]) =>
+  `<?xml version="1.0"?><rss><channel><title>News</title>${items
+    .map(([title, source, link]) => `<item><title>${title} - ${source}</title><link>${link}</link><pubDate>Fri, 30 Oct 2026 06:00:00 GMT</pubDate><source url="https://x">${source}</source></item>`)
+    .join("")}</channel></rss>`;
+
+/**
+ * The web, in process: Google News' RSS (top stories per edition, and a
+ * search), pages to read, and Tavily's search API.
+ */
+export async function webStandIn() {
+  const calls: HfCall[] = [];
+  const server: Server = createServer(async (req, res) => {
+    const raw = await body(req);
+    const url = new URL(req.url ?? "/", "http://x");
+    calls.push({ method: req.method ?? "", path: url.pathname + url.search, auth: String(req.headers.authorization ?? ""), body: raw ? JSON.parse(raw) : undefined });
+    const send = (status: number, type: string, b: string) => {
+      res.writeHead(status, { "content-type": type });
+      res.end(b);
+    };
+    if (url.pathname === "/rss") return send(200, "application/rss+xml", RSS([[`Top story for ${url.searchParams.get("gl")}`, "The Hindu", "https://news.example/1"], ["Markets &amp; more", "Mint", "https://news.example/2"]]));
+    if (url.pathname === "/rss/search") return send(200, "application/rss+xml", RSS([[`News on ${url.searchParams.get("q")}`, "Reuters", "https://news.example/3"]]));
+    if (url.pathname === "/article")
+      return send(200, "text/html; charset=utf-8", `<!doctype html><html><head><title>Kochi &amp; rain</title><script>alert("x")</script></head><body><nav>Home | World</nav><article><h1>Rain in Kochi</h1><p>Heavy rain is expected on Friday. ${"More detail. ".repeat(20)}</p><ul><li>Schools closed</li><li>Roads flooded</li></ul></article><footer>© News</footer></body></html>`);
+    if (url.pathname === "/big") return send(200, "text/plain", "x".repeat(50_000));
+    if (url.pathname === "/file.pdf") return send(200, "application/pdf", "%PDF-1.4");
+    if (url.pathname === "/search") {
+      if (req.headers.authorization !== `Bearer ${TAVILY_KEY}`) return send(401, "application/json", JSON.stringify({ detail: "Unauthorized" }));
+      const q = JSON.parse(raw) as { query: string; topic: string };
+      return send(200, "application/json", JSON.stringify({ results: [{ title: `Result for ${q.query} (${q.topic})`, url: "https://result.example/1", content: "A snippet." }] }));
+    }
+    send(404, "text/plain", "no such page");
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  const url = `http://127.0.0.1:${port}`;
+  return { url, news: `${url}/rss`, search: `${url}/search`, calls, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
 /** An Env as a deployment has it; `over` sets what the owner stored. */

@@ -25,11 +25,17 @@ export type Env = {
   // redeployed. For when the key itself can no longer be trusted; the page's
   // pause (kept in MEMORY) is the everyday switch.
   AGENT_KILL_SWITCH?: string
+  // Web search (Tavily). Stored, the agent can search the web; unset, it
+  // still reads the news and any page it is given (web.ts).
+  TAVILY_API_KEY?: string
   // TEST ONLY — where Hugging Face is. Unset, the router is
   // https://router.huggingface.co/v1 and a Space `<owner>/<name>` is
   // https://<owner>-<name>.hf.space; the e2e points both at a local stand-in.
   HF_ROUTER_URL?: string
   HF_SPACES_URL?: string
+  // TEST ONLY — where the news feed and web search are (web.ts).
+  NEWS_URL?: string
+  WEB_SEARCH_URL?: string
 }
 
 /** The agent is unlocked once its owner has stored an access key. */

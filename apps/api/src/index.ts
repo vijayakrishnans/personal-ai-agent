@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { z } from 'zod'
-import { runAgent, ChatRequest, TOOL_NAMES } from './agent'
+import { runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
 import { API_NAME } from './identity'
@@ -8,6 +8,7 @@ import { memoryOf, MAX_MEMORY_CHARS, MAX_SPACE_CHARS, type MemoryStore } from '.
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
 import { page } from './ui'
+import { webSearchConnected } from './web'
 
 export { AgentMemory } from './memory'
 
@@ -195,12 +196,13 @@ app.get('/health', (c) => {
     access: accessConfigured(env) ? 'configured' : 'not configured',
     killSwitch: killSwitchOn(env) ? 'on' : 'off',
     huggingface: huggingfaceConnected(env) ? 'connected' : 'not connected',
+    webSearch: webSearchConnected(env) ? 'connected' : 'not connected',
     models: {
       default: modelKey('workers-ai', DEFAULT_MODEL),
       'workers-ai': WORKERS_AI_MODELS.length,
       configured: parseHfModels(env?.HF_MODELS).length,
     },
-    tools: [...TOOL_NAMES],
+    tools: toolNames(env),
     endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', state: '/api/state', health: '/health' },
   })
 })

@@ -24,7 +24,7 @@ describe("POST /api/chat — Workers AI", () => {
     expect(res.status).toBe(200);
     expect(await json(res)).toEqual({ ok: true, text: "Echo: how are you", model: "workers-ai:@cf/moonshotai/kimi-k2.6", tools: [] });
     expect(x.asked[0]).toMatchObject({ model: "@cf/moonshotai/kimi-k2.6", roles: ["system", "user", "assistant", "user"] });
-    expect(x.asked[0]?.tools).toEqual(["remember", "recall", "forget", "currentTime"]);
+    expect(x.asked[0]?.tools).toEqual(["remember", "recall", "forget", "currentTime", "news", "readPage"]);
     expect(x.asked[0]?.system).toContain(`You are ${API_NAME},`);
   });
 
