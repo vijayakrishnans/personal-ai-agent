@@ -7,6 +7,7 @@ import { API_NAME } from './identity'
 import { memoryOf, MAX_MEMORY_CHARS, MAX_SPACE_CHARS, type MemoryStore } from './memory'
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
+import { hasSecret } from './secrets'
 import { page } from './ui'
 import { webSearchConnected } from './web'
 
@@ -100,6 +101,11 @@ app.delete('/api/models/:provider/:owner/:name', async (c) => {
   return removed ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
+const LOOKS_LIKE_SECRET = {
+  ok: false,
+  error: 'looks_like_secret',
+  message: 'That looks like a password, key, card or ID number, and the agent never keeps one. A password manager is the place for it.',
+}
 const INVALID_SPACE = { ok: false, error: 'invalid_space', message: `a space is a name of 1-${MAX_SPACE_CHARS} characters` }
 
 /** A space as a request sends it: absent is undefined (the default space), a bad one null. */
@@ -122,6 +128,7 @@ app.post('/api/memories', async (c) => {
   }
   const space = spaceParam(body?.space)
   if (space === null) return c.json(INVALID_SPACE, 400)
+  if (hasSecret(text) || hasSecret(space ?? '')) return c.json(LOOKS_LIKE_SECRET, 400)
   return c.json({ ok: true, memory: await c.var.memory.remember(text, space) }, 201)
 })
 
@@ -132,6 +139,7 @@ app.patch('/api/memories/:id', async (c) => {
   const body = (await c.req.json().catch(() => null)) as { space?: unknown } | null
   const space = spaceParam(body?.space)
   if (!space) return c.json(INVALID_SPACE, 400)
+  if (hasSecret(space)) return c.json(LOOKS_LIKE_SECRET, 400)
   const memory = await c.var.memory.moveMemory(id, space)
   return memory ? c.json({ ok: true, memory }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
@@ -141,6 +149,9 @@ app.delete('/api/memories/:id', async (c) => {
   if (!Number.isInteger(id) || id < 1) return c.json({ ok: false, error: 'not_found' }, 404)
   return (await c.var.memory.forget(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
+
+// The activity log: every tool the agent called, allowed or blocked.
+app.get('/api/activity', async (c) => c.json({ ok: true, activity: await c.var.memory.listActivity(100) }))
 
 // The pause — the owner's kill switch in the page. GET says whether it is on,
 // PUT {paused} flips it.
@@ -203,7 +214,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: toolNames(env),
-    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', state: '/api/state', health: '/health' },
+    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 

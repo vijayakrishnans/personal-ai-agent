@@ -91,6 +91,10 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 #knowledge-side{width:280px;flex:none;display:flex;flex-direction:column;gap:20px;overflow-y:auto;overflow-x:hidden}
 #detail{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:8px}
 #detail p{margin:0;overflow-wrap:anywhere}
+#activity li{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px;border-bottom:1px solid var(--line);padding:6px 0}
+#activity .when{color:var(--muted);white-space:nowrap}
+#activity .what{overflow-wrap:anywhere}
+#activity .blocked .what{color:var(--warn)}
 .row{display:flex;gap:8px}.row input{flex:1;width:0}
 .models{max-width:560px;display:grid;gap:24px}
 [hidden]{display:none!important}
@@ -193,6 +197,11 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
           <p class="hint" id="switch-note">Pausing stops the agent at once: no chat reaches any model, so nothing is spent, until you resume. What it remembers and its models stay as they are.</p>
           <p><button type="button" class="danger" id="switch">Pause the agent</button></p>
           <p class="hint">If the access key itself may have leaked, use the hard switch instead: store the secret <code>AGENT_KILL_SWITCH</code> = <code>on</code> for this environment and redeploy. Every /api route then refuses everyone, you included, until you remove it and redeploy.</p>
+        </section>
+        <section>
+          <h2>What it did</h2>
+          <p class="hint">Every tool the agent called, newest first. Blocked means a guard refused it: a secret kept out, a link nobody gave it, or a memory change after reading the web.</p>
+          <ul class="items" id="activity"></ul>
         </section>
         <section>
           <h2>This browser</h2>
@@ -415,10 +424,19 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     catch (err) { $('switch-note').textContent = err.message; }
   }
 
+  async function loadActivity() {
+    const { activity } = await api('/api/activity');
+    $('activity').replaceChildren(...(activity.length ? activity.map((a) => el('li', { className: a.outcome },
+      el('span', { className: 'when', textContent: new Date(a.at).toLocaleString() }),
+      el('span', { className: 'what', textContent: a.tool + (a.outcome === 'ok' ? '' : ' · ' + a.outcome) + (a.detail ? ' — ' + a.detail : '') }),
+    )) : [li('Nothing yet.')]));
+  }
+
   function tab(name) {
     for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
     for (const t of ['knowledge', 'models', 'access']) $('tab-' + t).hidden = t !== name;
     store.set('agent.tab', name);
+    if (name === 'access') loadActivity().catch(() => {});
   }
   function openSettings(name) { tab(name || store.get('agent.tab', 'knowledge')); if (!$('settings').open) $('settings').showModal(); }
 
@@ -487,7 +505,11 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
       const history = messages.filter((m) => !m.error).slice(-40).map(({ role, content }) => ({ role, content }));
       const reply = await api('/api/chat', { method: 'POST', body: JSON.stringify({ model: $('model').value, messages: history }) });
       const label = (models.find((m) => m.key === reply.model) || {}).label || reply.model;
-      messages.push({ role: 'assistant', content: reply.text || '(no answer)', meta: label + (reply.tools.length ? ' · used ' + reply.tools.join(', ') : '') });
+      // A secret in what was typed never reached the model; keep the redacted
+      // words here too, so this browser does not hold it either.
+      if (reply.said) { messages[messages.length - 1].content = reply.said; render(); }
+      const kept = reply.redacted ? ' · kept ' + reply.redacted + (reply.redacted === 1 ? ' secret' : ' secrets') + ' out' : '';
+      messages.push({ role: 'assistant', content: reply.text || '(no answer)', meta: label + (reply.tools.length ? ' · used ' + reply.tools.join(', ') : '') + kept });
       if (reply.tools.some((t) => t === 'remember' || t === 'forget')) loadMemories();
     } catch (err) {
       messages.push({ role: 'assistant', content: err.message, error: true });

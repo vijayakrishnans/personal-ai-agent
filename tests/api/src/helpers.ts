@@ -60,7 +60,8 @@ export type Asked = { model: string; tools: string[]; roles: string[]; system: s
 /**
  * A model that answers in the OpenAI chat-completions shape, deterministically:
  * a tool result is quoted, `remember: <fact>` (or `remember in <Space>: <fact>`)
- * becomes a `remember` call, `call <tool> <json>` a call of any tool, and
+ * becomes a `remember` call, `call <tool> <json>` a call of any tool (several,
+ * ` ; `-separated, one per step), and
  * anything else is echoed. Workers AI's binding and Hugging Face's router
  * both speak it; each records what it was asked.
  */
@@ -68,14 +69,17 @@ export function answer(messages: { role: string; content: unknown }[], tools: st
   asked.push({ model, tools, roles: messages.map((m) => m.role), system: text(messages.find((m) => m.role === "system")?.content) });
   const last = messages[messages.length - 1];
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
-  if (last?.role === "tool") return { message: { role: "assistant", content: `Tool said: ${text(last.content)}` }, finish_reason: "stop" };
-  const call = /^call (\w+) (\{.*\})$/.exec(text(lastUser?.content));
-  if (call && tools.includes(call[1] ?? "")) {
+  // `call A {…} ; call B {…}`: one call per step, in order, then the last result is quoted.
+  const calls = [...text(lastUser?.content).matchAll(/call (\w+) (\{.*?\})(?= ; |$)/g)];
+  const done = messages.length - 1 - messages.lastIndexOf(lastUser as (typeof messages)[number]);
+  const next = calls[Math.ceil(done / 2)];
+  if (next && tools.includes(next[1] ?? "")) {
     return {
-      message: { role: "assistant", content: "", tool_calls: [{ id: `call_${messages.length}`, type: "function", function: { name: call[1], arguments: call[2] } }] },
+      message: { role: "assistant", content: "", tool_calls: [{ id: `call_${messages.length}`, type: "function", function: { name: next[1], arguments: next[2] } }] },
       finish_reason: "tool_calls",
     };
   }
+  if (last?.role === "tool") return { message: { role: "assistant", content: `Tool said: ${text(last.content)}` }, finish_reason: "stop" };
   const fact = /^remember(?: in (\w+))?: (.+)$/.exec(text(lastUser?.content));
   if (fact && tools.includes("remember")) {
     const args = { fact: fact[2], ...(fact[1] ? { space: fact[1] } : {}) };

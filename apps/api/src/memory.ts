@@ -2,8 +2,9 @@ import { DurableObject } from 'cloudflare:workers'
 
 // THE AGENT'S MEMORY: one SQLite-backed Durable Object per environment, named
 // `owner` (memoryOf below). It keeps what outlives a chat — the facts the
-// agent was asked to remember, the models its owner added in the page, and
-// whether its owner paused it — and nothing else: a conversation lives in the owner's browser, so the
+// agent was asked to remember, the models its owner added in the page,
+// whether its owner paused it, and a log of the tools it called — and
+// nothing else: a conversation lives in the owner's browser, so the
 // Worker never stores what was said. Reached over RPC, so every method here
 // is the whole of what the Worker can ask of it.
 
@@ -11,6 +12,10 @@ import { DurableObject } from 'cloudflare:workers'
 // Work or Health. The page draws the spaces as a graph; the agent files a
 // fact under one when it remembers it.
 export type Memory = { id: number; text: string; space: string; createdAt: string }
+
+// One tool call, as the activity log keeps it: never a secret (the detail is
+// redacted before it is written) and never more than a line.
+export type Activity = { id: number; at: string; tool: string; detail: string; outcome: 'ok' | 'blocked' | 'error' }
 
 export type StoredModel = {
   provider: 'huggingface' | 'space'
@@ -33,12 +38,15 @@ export interface MemoryStore {
   listModels(): Promise<StoredModel[]>
   isPaused(): Promise<boolean>
   setPaused(paused: boolean): Promise<boolean>
+  logActivity(entry: Omit<Activity, 'id' | 'at'>): Promise<void>
+  listActivity(limit?: number): Promise<Activity[]>
 }
 
 // A fact or a model the owner can see in full on one screen.
 export const MAX_MEMORY_CHARS = 500
 export const MAX_MEMORIES = 500
 export const MAX_MODELS = 50
+export const MAX_ACTIVITY = 500
 export const MAX_SPACE_CHARS = 40
 export const DEFAULT_SPACE = 'General'
 
@@ -70,6 +78,13 @@ export class AgentMemory extends DurableObject implements MemoryStore {
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS activity (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          tool TEXT NOT NULL,
+          detail TEXT NOT NULL,
+          outcome TEXT NOT NULL
         );
       `)
       // Memories kept before spaces existed have none: they join the default.
@@ -162,6 +177,21 @@ export class AgentMemory extends DurableObject implements MemoryStore {
       paused ? '1' : '0',
     )
     return paused
+  }
+
+  // THE ACTIVITY LOG: every tool call the agent made, allowed or blocked —
+  // what the owner reads in ☰ → Access. The newest MAX_ACTIVITY are kept.
+  async logActivity(entry: Omit<Activity, 'id' | 'at'>): Promise<void> {
+    const sql = this.ctx.storage.sql
+    sql.exec('INSERT INTO activity (at, tool, detail, outcome) VALUES (?, ?, ?, ?)', new Date().toISOString(), entry.tool, entry.detail.slice(0, 300), entry.outcome)
+    sql.exec('DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY id DESC LIMIT ?)', MAX_ACTIVITY)
+  }
+
+  async listActivity(limit = 100): Promise<Activity[]> {
+    return this.ctx.storage.sql
+      .exec<Activity>('SELECT id, at, tool, detail, outcome FROM activity ORDER BY id DESC LIMIT ?', limit)
+      .toArray()
+      .map((r) => ({ ...r }))
   }
 
   private rows(query: string, ...args: (string | number)[]): Memory[] {

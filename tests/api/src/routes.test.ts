@@ -18,7 +18,7 @@ describe("GET /health", () => {
       models: { default: "workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai": 2, configured: 0 },
       webSearch: "not connected",
       tools: ["remember", "recall", "forget", "currentTime", "news", "readPage"],
-      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", state: "/api/state", health: "/health" },
+      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", state: "/api/state", activity: "/api/activity", health: "/health" },
     });
   });
 
@@ -61,6 +61,7 @@ describe("the owner's door (/api/*)", () => {
     ["PATCH", "/api/memories/1"],
     ["GET", "/api/state"],
     ["PUT", "/api/state"],
+    ["GET", "/api/activity"],
   ];
 
   it("is a 503 that says so, before an access key is stored", async () => {

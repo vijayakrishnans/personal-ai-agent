@@ -148,6 +148,40 @@ page says is treated as information, never as instructions: the agent is told
 not to follow directions found on the web, or to remember or forget anything
 because a page said to.
 
+## What keeps it safe
+
+Rules in a prompt can be talked around, so the agent's guards are in code.
+They hold whatever a model is told, by you or by a web page:
+
+- **It never holds a secret.** Before any model sees your message, anything
+  that looks like a secret is replaced with a marker such as
+  `[password removed]`. That covers passwords and PINs ("my password is …"),
+  API keys and tokens (OpenAI, Anthropic, Hugging Face, GitHub, AWS, Google,
+  Slack, Stripe and others), private keys, seed phrases, card numbers,
+  Aadhaar and PAN numbers, and long random strings. The page keeps the
+  redacted words too, so your browser doesn't store the secret. Its reply
+  says *kept 1 secret out*. A memory that looks like a secret is refused,
+  whether the agent or you add it.
+- **Nothing leaves except what you or a search put there.** `readPage` opens
+  only a link you wrote, a page on a site you named (with no query string,
+  which could carry data), or a link a news or search result gave it. A link
+  or search that carries a secret is refused. So a page cannot trick it into
+  sending what it knows to someone else's server.
+- **The web can't rewrite its memory.** Once the agent has read the news or a
+  page in a turn, `remember` and `forget` are refused for the rest of that
+  turn. Say it again in your own words and it will save it.
+- **It works for you.** Its prompt forbids threatening, pressuring or
+  bargaining with you, using what it knows against you, or asking for
+  passwords and ID numbers. It can't send email or messages at all. Its
+  only way out is the web, which the guards above control.
+- **You can see what it did.** ☰ → **Access** → **What it did** lists every
+  tool call, newest first, with blocked ones marked. No secret is written
+  there.
+
+Detection is pattern-based. A password that looks like an ordinary word,
+typed with no hint ("sunshine"), can't be recognised, so keep passwords in a
+password manager, not in the chat.
+
 ## Kill switch
 
 Two ways to stop the agent, both reversible:
@@ -176,6 +210,7 @@ Two ways to stop the agent, both reversible:
 | `GET /` | the agent's page: chat, model picker, added models, memories |
 | `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…]}` → `{"text", "model", "tools"}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
+| `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
 | `GET /api/state`, `PUT /api/state` (`{paused}`) | the pause: whether the agent is paused, and pausing or resuming it |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
 | `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
