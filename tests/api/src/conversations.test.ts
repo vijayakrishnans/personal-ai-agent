@@ -283,6 +283,13 @@ describe("the page's script", () => {
     expect(page("x")).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
   });
 
+  it("fits a phone: the sidebar is a drawer opened from the header", () => {
+    expect(page("x")).toContain('interactive-widget=resizes-content');
+    expect(page("x")).toMatch(/<button id="chats-open"[^>]*aria-controls="side"/);
+    expect(page("x")).toContain("body.drawer aside{transform:none}");
+    expect(script()).toContain("function drawer(on)");
+  });
+
   it("downloads an answer, or the whole chat, as Markdown", () => {
     expect(page("x")).toContain('id="download-chat"');
     expect(script()).toContain("textContent: 'Download', title: 'Download the question and this answer");

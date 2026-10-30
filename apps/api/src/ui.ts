@@ -731,6 +731,17 @@ const SCRIPT = String.raw`
       nodes.appendChild(svg('text', { x: 0, y: 32, 'text-anchor': 'middle', class: 'hub-label' }, 'You'));
     }
     g.replaceChildren(edges, nodes);
+    fitGraph();
+  }
+  // The view fits what is drawn (never closer than 420 × 300), so a few
+  // memories fill a phone's narrow box instead of a dot in its middle.
+  function fitGraph() {
+    const g = $('graph');
+    let b;
+    try { b = g.getBBox(); } catch { return; }
+    if (!b.width) return;
+    const w = Math.max(b.width + 80, 420), h = Math.max(b.height + 80, 300);
+    g.setAttribute('viewBox', [b.x + b.width / 2 - w / 2, b.y + b.height / 2 - h / 2, w, h].map(Math.round).join(' '));
   }
 
   // THE DETAIL CARD beside the graph: a memory can be moved to another space
@@ -881,6 +892,7 @@ const SCRIPT = String.raw`
     if (name === 'notes') loadNotes().catch(() => {});
     if (name === 'library') loadLibrary().catch(() => {});
     if (name === 'skills') loadSkills().catch(() => {});
+    if (name === 'knowledge') requestAnimationFrame(fitGraph);
   }
   function openSettings(name) { tab(name || store.get('agent.tab', 'knowledge')); if (!$('settings').open) $('settings').showModal(); }
 
@@ -889,6 +901,13 @@ const SCRIPT = String.raw`
     $('collapse').textContent = on ? '›' : '‹ Collapse';
     $('collapse').title = on ? 'Show your conversations' : 'Collapse the sidebar';
     store.set('agent.sidebar.collapsed', on);
+  }
+  // ON A PHONE the sidebar is a drawer from the left, opened from the
+  // header and closed by the scrim, Escape, or picking something in it.
+  function drawer(on) {
+    document.body.classList.toggle('drawer', on);
+    $('scrim').hidden = !on;
+    $('chats-open').setAttribute('aria-expanded', String(on));
   }
 
   async function start() {
@@ -917,6 +936,10 @@ const SCRIPT = String.raw`
   $('settings').onclick = (e) => { if (e.target === $('settings')) $('settings').close(); };
   for (const b of document.querySelectorAll('#tabs button')) b.onclick = () => tab(b.dataset.tab);
   $('collapse').onclick = () => collapse(!$('side').classList.contains('collapsed'));
+  $('chats-open').onclick = () => drawer(!document.body.classList.contains('drawer'));
+  $('scrim').onclick = () => drawer(false);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer')) drawer(false); });
+  $('side').addEventListener('click', (e) => { if (e.target.closest('#chats button:not(.chat-del), .tile')) drawer(false); });
   $('switch').onclick = () => setPaused(!paused);
   $('activity-all').onclick = () => openActivity();
   $('resume-banner').onclick = () => setPaused(false);
@@ -1034,7 +1057,7 @@ export function page(name: string): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>${title}</title>
 <style>
 :root{--bg:#f7f7f5;--panel:#fff;--ink:#1d1d1b;--muted:#6b6b66;--line:#e4e3de;--accent:#3b5bdb;--accent-ink:#fff;--me:#eef1fd;--warn:#b42318}
@@ -1079,7 +1102,7 @@ main{flex:1;display:flex;min-height:0}
 .track .row a{font-size:12px;padding:2px 8px}
 #library-music{list-style:none;margin:0;padding:0;display:grid;gap:12px;max-width:560px}
 #library-music>li>.row{align-items:center}#library-music>li>.row button{font-size:12px;padding:2px 8px}
-.map-wrap{margin:8px 0 0;display:grid;gap:8px}
+.map-wrap{margin:8px 0 0;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-width:0}
 .map{position:relative;width:600px;max-width:100%;height:320px;overflow:hidden;border-radius:10px;border:1px solid var(--line);background:#e8e6df}
 .map-stage{position:absolute;inset:0}
 .map img.tile{position:absolute;width:256px;height:256px;max-width:none;margin:0;user-select:none}
@@ -1221,7 +1244,31 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 .row{display:flex;gap:8px}.row input{flex:1;width:0}
 .models{max-width:620px;display:grid;gap:24px}
 [hidden]{display:none!important}
-@media (max-width:760px){main{flex-direction:column}aside{width:auto;border-left:0;border-top:1px solid var(--line);max-height:40dvh}aside.collapsed{width:auto;max-height:none}aside.collapsed #side-foot{justify-content:flex-end}#tab-knowledge{flex-direction:column}#graph-wrap{min-height:360px}#knowledge-side{width:auto}#settings-title{display:none}#tabs{flex:1}dialog#settings{width:100vw;height:100dvh;max-width:none;max-height:none;border-radius:0}#tools{padding:8px}}
+#chats-open,.narrow{display:none}
+@media (max-width:760px){
+header{gap:6px;padding:8px 10px;padding-top:max(8px,env(safe-area-inset-top))}
+header h1{display:none}
+header button{min-width:40px;height:40px;padding:0 10px;font-size:18px}
+#model{flex:1;min-width:0;height:40px;font-size:14px}
+#chats-open,.narrow{display:inline}#chats-open{display:inline-block}.wide{display:none}
+aside,aside.collapsed{position:fixed;top:0;bottom:0;left:0;z-index:20;width:min(320px,86vw);max-height:none;border-left:0;border-right:1px solid var(--line);transform:translateX(-100%);transition:transform .2s ease;box-shadow:8px 0 28px rgb(0 0 0 / .3);padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+aside.collapsed #side-body{display:flex}
+body.drawer aside{transform:none}
+#side-foot{display:none}
+#scrim{position:fixed;inset:0;z-index:19;background:rgb(0 0 0 / .45)}
+#chats li .chat-del{opacity:1}
+#log{padding:10px;gap:10px}
+.msg{max-width:100%;padding:10px 12px}
+.actions{opacity:1}.actions button{padding:6px 8px;font-size:13px}
+.map{height:260px}
+form#ask{padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom))}
+#composer{gap:6px}#composer textarea{height:44px;font-size:16px;min-width:0}
+#composer button{padding:0 12px}
+#tools-menu{left:8px;width:calc(100vw - 16px);max-height:60dvh}
+.credit{display:none}
+#tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}#tabs button{flex:none}
+input,select,textarea{font-size:16px}
+#tab-knowledge{flex-direction:column}#graph-wrap{flex:none;height:min(100vw,460px)}#knowledge-side{width:auto}#settings-title{display:none}#tabs{flex:1}dialog#settings{width:100vw;height:100dvh;max-width:none;max-height:none;border-radius:0}#tools{padding:8px}}
 </style>
 </head>
 <body>
@@ -1234,11 +1281,12 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
   </form>
 </div>
 <header>
+  <button id="chats-open" type="button" title="Your conversations, knowledge, notes and library" aria-label="Conversations" aria-controls="side" aria-expanded="false">☰</button>
   <h1>${title}</h1>
   <select id="model" aria-label="Model"></select>
-  <button id="download-chat" type="button" title="Download this conversation as a Markdown file">Download chat</button>
-  <button id="clear" type="button" title="Start a new conversation">New chat</button>
-  <button id="menu" type="button" title="Settings: knowledge, notes, library, models, access" aria-label="Settings">☰</button>
+  <button id="download-chat" type="button" title="Download this conversation as a Markdown file" aria-label="Download chat"><span class="wide">Download chat</span><span class="narrow" aria-hidden="true">⤓</span></button>
+  <button id="clear" type="button" title="Start a new conversation" aria-label="New chat"><span class="wide">New chat</span><span class="narrow" aria-hidden="true">+</span></button>
+  <button id="menu" type="button" title="Settings: knowledge, notes, library, models, access" aria-label="Settings">⚙</button>
 </header>
 <main>
   <section id="chat">
@@ -1272,6 +1320,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     </div>
     <div id="side-foot"><button type="button" id="collapse" title="Collapse the sidebar">‹ Collapse</button></div>
   </aside>
+  <div id="scrim" hidden></div>
 </main>
 <dialog id="settings" aria-labelledby="settings-title">
   <div id="settings-shell">

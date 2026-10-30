@@ -142,6 +142,10 @@ Settings (☰) → **Knowledge** draws them as a graph: you in the centre, each
 space a hub, each fact around its hub. Click a fact to move it to another
 space or remove it, click a space to rename it, or add a fact yourself.
 
+## On a phone
+
+On a phone the page fits the screen. The header is one row of icons: ☰ (your conversations), the model, ⤓ (download the chat), + (new chat) and ⚙ (settings). The sidebar slides in from the left and closes when you pick a chat, tap outside it, or press Escape. Settings fills the screen, with tabs that scroll sideways.
+
 ## Conversations
 
 Every conversation is saved with the agent after each answer, with any
