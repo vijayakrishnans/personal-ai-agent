@@ -45,7 +45,6 @@ const SCRIPT = String.raw`
   let chosenImageModel = '';
   let musicModels = [];
   let chosenMusicModel = '';
-  let mode = null;
   function renderImageModels() {
     $('image-model').replaceChildren(...imageModels.map((m) => { const o = new Option(m.label, m.id); o.selected = m.id === chosenImageModel; return o; }));
   }
@@ -495,8 +494,10 @@ const SCRIPT = String.raw`
     loadChats().catch(() => {});
   }
 
-  // THE TOOLS MENU: pick one for the next message; the agent is told to use it.
+  // THE TOOLS MENU: pick one or several for the next message — stacked, the
+  // agent uses every one and combines what they find. A combo picks a set.
   const MODES = [
+    ['knowledge', 'Your knowledge', 'Fit it to what it knows about you'],
     ['web', 'Web search', 'Search the web and read the results'],
     ['research', 'Research papers', 'Find and cite scholarly papers'],
     ['news', 'News', 'The latest headlines'],
@@ -508,22 +509,40 @@ const SCRIPT = String.raw`
     ['music', 'Make music', 'A track or a song, in a minute or two'],
     ['calculate', 'Calculate', 'Work out the numbers exactly'],
   ];
-  function setMode(m) {
-    mode = m;
-    const found = MODES.find((x) => x[0] === m);
-    $('mode-chip').hidden = !found;
-    $('mode-label').textContent = found ? 'Using: ' + found[1] : '';
-    $('tools').classList.toggle('on', !!found);
+  const COMBOS = [
+    ['Where should I go?', ['knowledge', 'web', 'weather', 'map']],
+    ['Up-to-date answer', ['knowledge', 'web', 'news']],
+    ['Deep research', ['research', 'web', 'wikipedia']],
+  ];
+  let picked = [];
+  function setModes(list) {
+    picked = MODES.map((x) => x[0]).filter((id) => list.includes(id));
+    const label = (id) => MODES.find((x) => x[0] === id)[1];
+    $('mode-chips').hidden = !picked.length;
+    $('mode-chips').replaceChildren(
+      el('span', { className: 'hint', textContent: picked.length > 1 ? 'Using together:' : 'Using:' }),
+      ...picked.map((id) => el('span', { className: 'chip' }, label(id), el('button', { type: 'button', textContent: '✕', title: 'Stop using ' + label(id), onclick: () => { setModes(picked.filter((x) => x !== id)); $('input').focus(); } }))),
+      ...(picked.length > 1 ? [el('button', { type: 'button', className: 'link', textContent: 'Clear all', onclick: () => { setModes([]); $('input').focus(); } })] : []));
+    $('tools').classList.toggle('on', picked.length > 0);
+    $('tools').textContent = picked.length ? '+ Tools · ' + picked.length : '+ Tools';
+    for (const b of document.querySelectorAll('#tools-menu [data-mode]')) b.setAttribute('aria-checked', String(picked.includes(b.dataset.mode)));
   }
   function toolsMenu(open) {
     $('tools-menu').hidden = !open;
     $('tools').setAttribute('aria-expanded', String(open));
-    if (open) $('tools-menu').querySelector('button').focus();
+    if (open) $('tools-menu').querySelector('[data-mode]').focus();
   }
-  $('tools-menu').replaceChildren(...MODES.map(([id, label, hint]) => el('button', { type: 'button', role: 'menuitem', onclick: () => { setMode(id); toolsMenu(false); $('input').focus(); } },
-    el('strong', { textContent: label }), el('small', { textContent: hint }))));
+  $('tools-menu').replaceChildren(
+    el('div', { className: 'menu-head' }, el('strong', { textContent: 'Pick one or stack several' }), el('small', { textContent: 'The agent uses every tool you pick and combines what they find.' })),
+    el('div', { className: 'combos' }, ...COMBOS.map(([label, ids]) => el('button', { type: 'button', className: 'combo', title: ids.map((id) => MODES.find((x) => x[0] === id)[1]).join(' + '), textContent: label, onclick: () => { setModes(ids); toolsMenu(false); $('input').focus(); } }))),
+    el('div', { className: 'modes' }, ...MODES.map(([id, label, hint]) => {
+      const b = el('button', { type: 'button', role: 'menuitemcheckbox', onclick: () => setModes(picked.includes(id) ? picked.filter((x) => x !== id) : picked.concat(id)) },
+        el('span', { className: 'tick' }), el('span', {}, el('strong', { textContent: label }), el('small', { textContent: hint })));
+      b.dataset.mode = id; b.setAttribute('aria-checked', 'false');
+      return b;
+    })),
+    el('div', { className: 'menu-foot' }, el('button', { type: 'button', className: 'primary', textContent: 'Done', onclick: () => { toolsMenu(false); $('input').focus(); } })));
   $('tools').onclick = () => toolsMenu($('tools-menu').hidden);
-  $('mode-clear').onclick = () => { setMode(null); $('input').focus(); };
   document.addEventListener('click', (e) => { if (!$('tools-menu').hidden && !$('tools-menu').contains(e.target) && e.target !== $('tools')) toolsMenu(false); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('tools-menu').hidden) { toolsMenu(false); $('tools').focus(); } });
 
@@ -621,7 +640,7 @@ const SCRIPT = String.raw`
     if (selected && selected.kind === 'memory' && !memories.some((m) => m.id === selected.id)) selected = null;
     if (selected && selected.kind === 'space' && !memories.some((m) => m.space === selected.name)) selected = null;
     $('space-names').replaceChildren(...spaces().map((g) => new Option(g.name)));
-    $('memory-count').textContent = memories.length ? String(memories.length) : '';
+    $('memory-count').textContent = memories.length ? memories.length + (memories.length === 1 ? ' memory' : ' memories') + ' · open the graph' : 'What it knows about you';
     renderGraph(); renderDetail();
   }
 
@@ -748,6 +767,8 @@ const SCRIPT = String.raw`
   }
   async function loadNotes() {
     const { notes } = await api('/api/notes');
+    const open = notes.filter((n) => !n.done).length;
+    $('notes-count').textContent = notes.length ? open + ' open' + (notes.some((n) => n.expiresAt) ? ' · some expire soon' : '') : 'Short-lived notes and to-dos';
     const lists = new Map();
     for (const n of notes) { if (!lists.has(n.list)) lists.set(n.list, []); lists.get(n.list).push(n); }
     $('list-names').replaceChildren(...[...lists.keys()].map((n) => new Option(n)));
@@ -775,12 +796,46 @@ const SCRIPT = String.raw`
     )) : [el('p', { className: 'hint', textContent: 'No notes. Save an answer as a note, add one here, or ask your agent: “add milk to my groceries”. Notes go after 2 days unless you keep them.' })]));
   }
 
+  // WHAT IT DID: the newest four here; the whole log (the last 100) opens in
+  // a window of its own, filtered by outcome.
+  const activityRow = (a, doc) => {
+    const make = (tag, props) => Object.assign((doc || document).createElement(tag), props);
+    const row = make('li', { className: a.outcome });
+    row.append(make('span', { className: 'when', textContent: new Date(a.at).toLocaleString() }),
+      make('span', { className: 'what', textContent: a.tool + (a.outcome === 'ok' ? '' : ' · ' + a.outcome) + (a.detail ? ' — ' + a.detail : '') }));
+    return row;
+  };
   async function loadActivity() {
     const { activity } = await api('/api/activity');
-    $('activity').replaceChildren(...(activity.length ? activity.map((a) => el('li', { className: a.outcome },
-      el('span', { className: 'when', textContent: new Date(a.at).toLocaleString() }),
-      el('span', { className: 'what', textContent: a.tool + (a.outcome === 'ok' ? '' : ' · ' + a.outcome) + (a.detail ? ' — ' + a.detail : '') }),
-    )) : [li('Nothing yet.')]));
+    $('activity').replaceChildren(...(activity.length ? activity.slice(0, 4).map((a) => activityRow(a)) : [li('Nothing yet.')]));
+    $('activity-all').hidden = activity.length <= 4;
+    $('activity-all').textContent = 'Open the full log (' + activity.length + ') ↗';
+  }
+  async function openActivity() {
+    const w = window.open('', '_blank');
+    if (!w) { toast('Allow pop-ups for this page to open the log'); return; }
+    const d = w.document;
+    d.title = 'What it did — ' + document.title;
+    const style = d.createElement('style');
+    style.textContent = ':root{color-scheme:light dark}body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:Canvas;color:CanvasText}main{max-width:900px;margin:0 auto;padding:24px}h1{font-size:18px;margin:0 0 4px}p{margin:0 0 16px;opacity:.7}nav{display:flex;gap:6px;margin:0 0 12px}nav button{font:inherit;padding:4px 12px;border-radius:999px;border:1px solid #8886;background:none;color:inherit;cursor:pointer}nav button[aria-pressed=true]{background:#3b5bdb;border-color:#3b5bdb;color:#fff}ul{list-style:none;margin:0;padding:0}li{display:grid;grid-template-columns:190px 1fr;gap:10px;border-bottom:1px solid #8883;padding:7px 0}.when{opacity:.65;white-space:nowrap}.what{overflow-wrap:anywhere}.blocked .what,.error .what{color:#d93a2b}';
+    d.head.append(style);
+    const main = d.createElement('main');
+    const list = d.createElement('ul');
+    const nav = d.createElement('nav');
+    let all = [];
+    const show = (f) => {
+      for (const b of nav.children) b.setAttribute('aria-pressed', String(b.dataset.f === f));
+      const rows = all.filter((a) => f === 'all' || a.outcome === f);
+      list.replaceChildren(...(rows.length ? rows.map((a) => activityRow(a, d)) : [Object.assign(d.createElement('li'), { textContent: 'Nothing here.' })]));
+    };
+    for (const [f, label] of [['all', 'All'], ['ok', 'Worked'], ['error', 'Failed'], ['blocked', 'Blocked']]) {
+      const b = d.createElement('button'); b.dataset.f = f; b.textContent = label; b.onclick = () => show(f); nav.append(b);
+    }
+    const h = d.createElement('h1'); h.textContent = 'What it did';
+    const p = d.createElement('p'); p.textContent = 'Every tool the agent called, newest first (the last 100). Failed shows why; blocked means a guard refused it.';
+    main.append(h, p, nav, list); d.body.append(main);
+    try { all = (await api('/api/activity')).activity; show('all'); }
+    catch (err) { list.textContent = err.message; }
   }
 
   function tab(name) {
@@ -811,7 +866,7 @@ const SCRIPT = String.raw`
     try { const { conversation } = await api('/api/conversations/' + encodeURIComponent(convId)); messages = conversation.messages; }
     catch { if (messages.length) saveChat().catch(() => {}); }
     store.set('agent.conversation', convId);
-    render(); loadChats().catch(() => {});
+    render(); loadChats().catch(() => {}); loadNotes().catch(() => {});
   }
 
   $('unlock').onsubmit = (e) => { e.preventDefault(); key = $('key').value.trim(); store.set('agent.key', key); start().catch(() => {}); };
@@ -828,6 +883,7 @@ const SCRIPT = String.raw`
   for (const b of document.querySelectorAll('#tabs button')) b.onclick = () => tab(b.dataset.tab);
   $('collapse').onclick = () => collapse(!$('side').classList.contains('collapsed'));
   $('switch').onclick = () => setPaused(!paused);
+  $('activity-all').onclick = () => openActivity();
   $('resume-banner').onclick = () => setPaused(false);
   $('lock-now').onclick = () => lock('Locked. Enter the access key to use this agent here again.');
   $('note-form').onsubmit = async (e) => {
@@ -906,15 +962,15 @@ const SCRIPT = String.raw`
     e.preventDefault();
     const text = $('input').value.trim(); if (!text || paused) return;
     $('input').value = '';
-    const using = mode; setMode(null);
+    const using = picked; setModes([]);
     messages.push({ role: 'user', content: text }); bubble(messages[messages.length - 1], messages.length - 1);
     const pending = bubble({ role: 'assistant', content: '…' }, -1);
-    if (using === 'music' || /\b(music|song|track|tune|melody|beat)\b/i.test(text)) pending.append(el('span', { className: 'meta', textContent: 'Music takes a minute or two to make…' }));
+    if (using.includes('music') || /\b(music|song|track|tune|melody|beat)\b/i.test(text)) pending.append(el('span', { className: 'meta', textContent: 'Music takes a minute or two to make…' }));
     $('send').disabled = true;
     try {
       // What a model is sent: the words only (an image or a map is shown, not resent).
       const history = messages.filter((m) => !m.error && m.content).slice(-40).map(({ role, content }) => ({ role, content: content.slice(0, 8000) }));
-      const reply = await api('/api/chat', { method: 'POST', body: JSON.stringify({ model: $('model').value, messages: history, ...(using ? { mode: using } : {}) }) });
+      const reply = await api('/api/chat', { method: 'POST', body: JSON.stringify({ model: $('model').value, messages: history, ...(using.length ? { modes: using } : {}) }) });
       const label = (models.find((m) => m.key === reply.model) || {}).label || reply.model;
       // A secret in what was typed never reached the model; keep the redacted
       // words here too, so neither this browser nor the saved conversation holds it.
@@ -1048,12 +1104,22 @@ form#ask{position:relative;display:grid;gap:6px;padding:12px 16px;border-top:1px
 #composer textarea{flex:1;resize:none;height:44px}
 #tools{white-space:nowrap}
 #tools.on{border-color:var(--accent);color:var(--accent)}
-#mode-chip{display:flex;align-items:center;gap:6px;align-self:start;font-size:13px;background:var(--me);border:1px solid var(--accent);color:var(--accent);border-radius:999px;padding:2px 4px 2px 12px}
-#mode-chip button{border:0;background:none;padding:0 6px;color:inherit}
-#tools-menu{position:absolute;left:16px;bottom:calc(100% - 4px);z-index:2;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgb(0 0 0 / .18);padding:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:2px;width:min(460px,calc(100vw - 32px))}
-#tools-menu button{border:0;background:none;text-align:left;display:grid;gap:0;padding:8px 10px}
-#tools-menu button:hover,#tools-menu button:focus{background:var(--bg)}
-#tools-menu small{color:var(--muted);font-size:12px}
+#mode-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:13px}
+.chip{display:inline-flex;align-items:center;gap:2px;background:var(--me);border:1px solid var(--accent);color:var(--accent);border-radius:999px;padding:2px 4px 2px 12px}
+.chip button{border:0;background:none;padding:0 6px;color:inherit}
+#tools-menu{position:absolute;left:16px;bottom:calc(100% - 4px);z-index:2;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgb(0 0 0 / .18);padding:10px;display:grid;gap:8px;width:min(520px,calc(100vw - 32px));max-height:70dvh;overflow-y:auto}
+#tools-menu small{display:block;color:var(--muted);font-size:12px}
+.menu-head{padding:2px 4px}
+.combos{display:flex;flex-wrap:wrap;gap:6px}
+.combo{border-radius:999px;font-size:13px;padding:4px 12px;border-color:var(--accent);color:var(--accent);background:none}
+.modes{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px}
+.modes button{border:0;background:none;text-align:left;display:flex;gap:10px;align-items:flex-start;padding:8px 10px}
+.modes button:hover,.modes button:focus{background:var(--bg)}
+.modes button[aria-checked="true"]{background:var(--me)}
+.tick{flex:none;width:16px;height:16px;margin-top:2px;border:1.5px solid var(--muted);border-radius:4px;position:relative}
+[aria-checked="true"] .tick{background:var(--accent);border-color:var(--accent)}
+[aria-checked="true"] .tick::after{content:'';position:absolute;left:4px;top:0;width:5px;height:10px;border:solid var(--accent-ink);border-width:0 2px 2px 0;transform:rotate(45deg)}
+.menu-foot{display:flex;justify-content:flex-end}
 aside{width:300px;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
 #side-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px}
 #side-body input[type=search]{width:100%}
@@ -1066,8 +1132,14 @@ aside{width:300px;border-left:1px solid var(--line);background:var(--panel);disp
 .chat-open small{color:var(--muted);font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .chat-del{border:0;background:none;color:var(--muted);padding:0 8px;opacity:0}
 #chats li:hover .chat-del,.chat-del:focus{opacity:1}
-#shortcuts{display:grid;gap:6px;justify-items:start}
-#memory-count{color:var(--muted);font-size:12px;margin-left:4px}
+#shortcuts{display:grid;gap:8px}
+.tile{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:12px 14px;border-radius:12px;background:var(--bg)}
+.tile:hover,.tile:focus{border-color:var(--accent)}
+.tile-icon{flex:none;width:34px;height:34px;border-radius:10px;background:var(--me);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:18px}
+.tile-text{flex:1;min-width:0;display:grid}
+.tile-text strong{font-size:15px}
+.tile-text small{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-go{color:var(--muted);font-size:20px}
 #side-foot{border-top:1px solid var(--line);padding:8px;display:flex;justify-content:flex-end}
 #side-foot button{padding:4px 10px;font-size:13px}
 aside.collapsed{width:48px}
@@ -1137,7 +1209,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     <div id="paused" role="status" hidden><span>Paused: the kill switch is on, so the agent calls no model.</span><button type="button" id="resume-banner">Resume</button></div>
     <div id="log" aria-live="polite"></div>
     <form id="ask">
-      <div id="mode-chip" hidden><span id="mode-label"></span><button type="button" id="mode-clear" aria-label="Stop using this tool" title="Stop using this tool">✕</button></div>
+      <div id="mode-chips" hidden></div>
       <div id="composer">
         <button type="button" id="tools" aria-haspopup="menu" aria-expanded="false" aria-controls="tools-menu" title="Ask the agent to use a tool">+ Tools</button>
         <textarea id="input" placeholder="Ask your agent…" required></textarea>
@@ -1157,9 +1229,9 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
       </section>
       <section id="shortcuts">
         <h2>Yours</h2>
-        <button type="button" class="link" id="open-graph">Knowledge graph<span id="memory-count"></span></button>
-        <button type="button" class="link" id="open-notes">Notes</button>
-        <button type="button" class="link" id="open-library">Library</button>
+        <button type="button" class="tile" id="open-graph"><span class="tile-icon" aria-hidden="true">◎</span><span class="tile-text"><strong>Knowledge</strong><small id="memory-count">What it knows about you</small></span><span class="tile-go" aria-hidden="true">›</span></button>
+        <button type="button" class="tile" id="open-notes"><span class="tile-icon" aria-hidden="true">✎</span><span class="tile-text"><strong>Notes</strong><small id="notes-count">Short-lived notes and to-dos</small></span><span class="tile-go" aria-hidden="true">›</span></button>
+        <button type="button" class="tile" id="open-library"><span class="tile-icon" aria-hidden="true">♪</span><span class="tile-text"><strong>Library</strong><small>Images, music, answers kept whole</small></span><span class="tile-go" aria-hidden="true">›</span></button>
       </section>
     </div>
     <div id="side-foot"><button type="button" id="collapse" title="Collapse the sidebar">‹ Collapse</button></div>
@@ -1293,6 +1365,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
           <h2>What it did</h2>
           <p class="hint">Every tool the agent called, newest first. Blocked means a guard refused it: a secret kept out, a link nobody gave it, or a memory change after reading the web.</p>
           <ul class="items" id="activity"></ul>
+          <p><button type="button" class="link" id="activity-all" hidden>Open the full log ↗</button></p>
         </section>
         <section>
           <h2>This browser</h2>

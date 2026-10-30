@@ -55,7 +55,7 @@ export function memoryNamespace(db?: DatabaseSync) {
 
 const text = (c: unknown) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p) => (p as { text?: string })?.text ?? "").join("") : "");
 
-export type Asked = { model: string; tools: string[]; roles: string[]; system: string };
+export type Asked = { model: string; tools: string[]; roles: string[]; system: string; toolChoice?: unknown };
 
 /**
  * A model that answers in the OpenAI chat-completions shape, deterministically:
@@ -102,7 +102,7 @@ export function aiStandIn() {
   const AI = {
     async run(
       model: string,
-      inputs: { prompt?: string; multipart?: { body: ReadableStream; contentType: string }; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[] },
+      inputs: { prompt?: string; multipart?: { body: ReadableStream; contentType: string }; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[]; tool_choice?: unknown },
     ) {
       if (model.includes("flux")) {
         // FLUX.2 takes a multipart form, FLUX.1 JSON; FLUX.2 answers with a PNG here.
@@ -114,7 +114,11 @@ export function aiStandIn() {
         return { image: inputs.multipart ? PNG_BASE64 : JPEG_BASE64 };
       }
       const tools = (inputs.tools ?? []).map((t) => t.function?.name ?? "").filter(Boolean);
-      return { choices: [answer(inputs.messages ?? [], tools, model, asked)], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } };
+      // A model that cannot be made to call a tool, as some refuse.
+      if (inputs.tool_choice === "required" && JSON.stringify(inputs.messages).includes("noforce")) throw new Error("tool_choice required is not supported");
+      const choice = answer(inputs.messages ?? [], tools, model, asked);
+      (asked[asked.length - 1] as Asked).toolChoice = inputs.tool_choice;
+      return { choices: [choice], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } };
     },
   };
   return { AI: AI as unknown as Ai, asked };
