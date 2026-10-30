@@ -20,6 +20,11 @@ export type Env = {
   // page are kept in MEMORY beside these.
   HF_TOKEN?: string
   HF_MODELS?: string
+  // The hard kill switch: `on` (or true, 1, yes) and every /api route answers
+  // 503 — even to the right key — until it is removed and the Worker
+  // redeployed. For when the key itself can no longer be trusted; the page's
+  // pause (kept in MEMORY) is the everyday switch.
+  AGENT_KILL_SWITCH?: string
   // TEST ONLY — where Hugging Face is. Unset, the router is
   // https://router.huggingface.co/v1 and a Space `<owner>/<name>` is
   // https://<owner>-<name>.hf.space; the e2e points both at a local stand-in.
@@ -29,6 +34,9 @@ export type Env = {
 
 /** The agent is unlocked once its owner has stored an access key. */
 export const accessConfigured = (env: Env) => Boolean(env.AGENT_ACCESS_KEY)
+
+/** The hard kill switch is on: AGENT_KILL_SWITCH is on, true, 1 or yes. */
+export const killSwitchOn = (env: Env) => /^(on|true|1|yes)$/i.test(env.AGENT_KILL_SWITCH?.trim() ?? '')
 
 /** Hugging Face is connected once a token is stored. */
 export const huggingfaceConnected = (env: Env) => Boolean(env.HF_TOKEN)

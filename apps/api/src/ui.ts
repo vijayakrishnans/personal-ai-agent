@@ -7,7 +7,8 @@
 // stay in the browser (localStorage); models and memories are read from and
 // written to /api with the key as a bearer token. The sidebar lists what the
 // agent remembers by space; ☰ opens the settings — the knowledge graph of
-// those spaces, the Hugging Face models, and this browser's access.
+// those spaces, the Hugging Face models, and access — the kill switch
+// that pauses the agent, and locking this browser.
 
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
@@ -31,6 +32,7 @@ select,input,textarea,button{font:inherit;color:inherit}
 select,input,textarea{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
 button{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:8px 12px;cursor:pointer}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.danger{border-color:var(--warn);color:var(--warn)}
 button.link{border:0;background:none;padding:0;color:var(--accent);font-size:13px}
 button:disabled{opacity:.5;cursor:default}
 main{flex:1;display:flex;min-height:0}
@@ -40,6 +42,9 @@ main{flex:1;display:flex;min-height:0}
 .msg.user{align-self:flex-end;background:var(--me)}
 .msg .meta{display:block;margin-top:6px;font-size:12px;color:var(--muted)}
 .msg.error{border-color:var(--warn);color:var(--warn)}
+#paused{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--warn);color:var(--warn);background:var(--panel);font-size:14px}
+#paused span{flex:1}
+#paused button{padding:4px 10px;font-size:13px}
 form#ask{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel)}
 form#ask textarea{flex:1;resize:none;height:44px}
 aside{width:300px;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
@@ -109,6 +114,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 </header>
 <main>
   <section id="chat">
+    <div id="paused" role="status" hidden><span>Paused: the kill switch is on, so the agent calls no model.</span><button type="button" id="resume-banner">Resume</button></div>
     <div id="log" aria-live="polite"></div>
     <form id="ask">
       <textarea id="input" placeholder="Ask your agent…" required></textarea>
@@ -183,6 +189,12 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     <section class="tab" id="tab-access" role="tabpanel" hidden>
       <div class="models">
         <section>
+          <h2>Kill switch</h2>
+          <p class="hint" id="switch-note">Pausing stops the agent at once: no chat reaches any model, so nothing is spent, until you resume. What it remembers and its models stay as they are.</p>
+          <p><button type="button" class="danger" id="switch">Pause the agent</button></p>
+          <p class="hint">If the access key itself may have leaked, use the hard switch instead: store the secret <code>AGENT_KILL_SWITCH</code> = <code>on</code> for this environment and redeploy. Every /api route then refuses everyone, you included, until you remove it and redeploy.</p>
+        </section>
+        <section>
           <h2>This browser</h2>
           <p class="hint">The access key and this conversation are kept in this browser only. Locking forgets the key here; the agent and what it remembers are untouched.</p>
           <p><button type="button" id="lock-now">Lock this browser</button></p>
@@ -205,11 +217,13 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
   let models = [];
   let memories = [];
   let selected = null; // { kind: 'space', name } | { kind: 'memory', id }
+  let paused = false;
 
   async function api(path, opts = {}) {
     const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key, ...(opts.headers || {}) } });
     const body = await res.json().catch(() => ({}));
     if (res.status === 401) { lock('That key was not accepted.'); throw new Error('unauthorized'); }
+    if (res.status === 503 && body.error === 'agent_paused') { showPaused(true); throw new Error(body.message); }
     if (res.status === 503) { lock(body.message); throw new Error(body.error); }
     if (!res.ok) throw new Error(body.message || ('HTTP ' + res.status));
     return body;
@@ -387,6 +401,20 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     }
   }
 
+  // THE KILL SWITCH: paused, the banner says so and Send is off.
+  function showPaused(on) {
+    paused = on;
+    $('paused').hidden = !on;
+    $('send').disabled = on;
+    $('input').placeholder = on ? 'Paused — resume to chat' : 'Ask your agent…';
+    $('switch').textContent = on ? 'Resume the agent' : 'Pause the agent';
+    $('switch').className = on ? 'primary' : 'danger';
+  }
+  async function setPaused(on) {
+    try { showPaused((await api('/api/state', { method: 'PUT', body: JSON.stringify({ paused: on }) })).paused); }
+    catch (err) { $('switch-note').textContent = err.message; }
+  }
+
   function tab(name) {
     for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
     for (const t of ['knowledge', 'models', 'access']) $('tab-' + t).hidden = t !== name;
@@ -403,6 +431,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 
   async function start() {
     $('lock').hidden = true;
+    showPaused((await api('/api/state')).paused);
     await loadModels(); await loadMemories(); render();
   }
 
@@ -415,6 +444,8 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
   $('settings').onclick = (e) => { if (e.target === $('settings')) $('settings').close(); };
   for (const b of document.querySelectorAll('#tabs button')) b.onclick = () => tab(b.dataset.tab);
   $('collapse').onclick = () => collapse(!$('side').classList.contains('collapsed'));
+  $('switch').onclick = () => setPaused(!paused);
+  $('resume-banner').onclick = () => setPaused(false);
   $('lock-now').onclick = () => lock('Locked. Enter the access key to use this agent here again.');
   $('add-memory').onsubmit = async (e) => {
     e.preventDefault();
@@ -447,7 +478,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
   $('input').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('ask').requestSubmit(); } };
   $('ask').onsubmit = async (e) => {
     e.preventDefault();
-    const text = $('input').value.trim(); if (!text) return;
+    const text = $('input').value.trim(); if (!text || paused) return;
     $('input').value = '';
     messages.push({ role: 'user', content: text }); bubble(messages[messages.length - 1]);
     const pending = bubble({ role: 'assistant', content: '…' });
@@ -462,7 +493,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
       messages.push({ role: 'assistant', content: err.message, error: true });
     } finally {
       pending.remove(); bubble(messages[messages.length - 1]);
-      store.set('agent.messages', messages.slice(-100)); $('send').disabled = false; $('input').focus();
+      store.set('agent.messages', messages.slice(-100)); $('send').disabled = paused; $('input').focus();
     }
   };
 

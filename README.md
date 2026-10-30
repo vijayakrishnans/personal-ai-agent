@@ -116,6 +116,27 @@ fact yourself. **The conversation itself stays in your browser**
 (localStorage), and the Worker stores nothing of what was said. **New chat**
 clears it.
 
+## Kill switch
+
+Two ways to stop the agent, both reversible:
+
+- **Pause** (everyday). In the page, open ☰ → **Access** → **Pause the
+  agent**. It takes effect at once, with no redeploy. Every chat is refused
+  with `503` before any model is called, so nothing is spent, and a banner
+  says so. What it remembers and its models stay readable. **Resume** turns it
+  back on. The pause is kept in the agent's Durable Object, so it holds for
+  every browser.
+- **Hard off** (if the key may have leaked). Store `AGENT_KILL_SWITCH` = `on`
+  for the environment and redeploy:
+
+  ```bash
+  orun secrets set AGENT_KILL_SWITCH --org <ws> --env prod   # value: on
+  ```
+
+  Every `/api` route then answers `503` to everyone, the right key included,
+  and `/health` reports `"killSwitch":"on"`. To turn it back on, set it to
+  `off` and redeploy. Then rotate `AGENT_ACCESS_KEY` if it leaked.
+
 ## Routes
 
 | Route | Answers |
@@ -123,12 +144,15 @@ clears it.
 | `GET /` | the agent's page: chat, model picker, added models, memories |
 | `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…]}` → `{"text", "model", "tools"}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
+| `GET /api/state`, `PUT /api/state` (`{paused}`) | the pause: whether the agent is paused, and pausing or resuming it |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
-| `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"huggingface":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
+| `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |
 
 Every `/api` route needs `Authorization: Bearer <AGENT_ACCESS_KEY>`. Without
-a key stored it answers `503`; with a missing or wrong key, `401`.
+a key stored it answers `503`; with a missing or wrong key, `401`. With
+`AGENT_KILL_SWITCH` on it answers `503` to everyone; paused, `POST /api/chat`
+answers `503`.
 
 ## What is here
 

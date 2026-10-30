@@ -2,8 +2,8 @@ import { DurableObject } from 'cloudflare:workers'
 
 // THE AGENT'S MEMORY: one SQLite-backed Durable Object per environment, named
 // `owner` (memoryOf below). It keeps what outlives a chat — the facts the
-// agent was asked to remember, and the models its owner added in the page —
-// and nothing else: a conversation lives in the owner's browser, so the
+// agent was asked to remember, the models its owner added in the page, and
+// whether its owner paused it — and nothing else: a conversation lives in the owner's browser, so the
 // Worker never stores what was said. Reached over RPC, so every method here
 // is the whole of what the Worker can ask of it.
 
@@ -31,6 +31,8 @@ export interface MemoryStore {
   addModel(model: StoredModel): Promise<StoredModel>
   removeModel(provider: string, id: string): Promise<boolean>
   listModels(): Promise<StoredModel[]>
+  isPaused(): Promise<boolean>
+  setPaused(paused: boolean): Promise<boolean>
 }
 
 // A fact or a model the owner can see in full on one screen.
@@ -64,6 +66,10 @@ export class AgentMemory extends DurableObject implements MemoryStore {
           api_name TEXT,
           created_at TEXT NOT NULL,
           PRIMARY KEY (provider, id)
+        );
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
         );
       `)
       // Memories kept before spaces existed have none: they join the default.
@@ -142,6 +148,20 @@ export class AgentMemory extends DurableObject implements MemoryStore {
         tools: r.tools === 1,
         ...(r.api_name ? { apiName: r.api_name } : {}),
       }))
+  }
+
+  // THE PAUSE: the owner's everyday kill switch, flipped in the page. While
+  // it is on the agent calls no model; what it remembers stays readable.
+  async isPaused(): Promise<boolean> {
+    return this.ctx.storage.sql.exec<{ value: string }>("SELECT value FROM settings WHERE key = 'paused'").toArray()[0]?.value === '1'
+  }
+
+  async setPaused(paused: boolean): Promise<boolean> {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO settings (key, value) VALUES ('paused', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+      paused ? '1' : '0',
+    )
+    return paused
   }
 
   private rows(query: string, ...args: (string | number)[]): Memory[] {

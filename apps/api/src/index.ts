@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono'
 import { z } from 'zod'
 import { runAgent, ChatRequest, TOOL_NAMES } from './agent'
 import { bearer, keyMatches } from './auth'
-import { accessConfigured, huggingfaceConnected, type Env } from './env'
+import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
 import { API_NAME } from './identity'
 import { memoryOf, MAX_MEMORY_CHARS, MAX_SPACE_CHARS, type MemoryStore } from './memory'
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_MODELS } from './models'
@@ -21,16 +21,28 @@ const NOT_CONFIGURED = {
   message:
     'This agent is locked until its owner stores AGENT_ACCESS_KEY as this environment’s secret and redeploys (README → Unlock the agent).',
 }
+const KILLED = {
+  ok: false,
+  error: 'agent_disabled',
+  message: 'This agent is switched off: AGENT_KILL_SWITCH is on. Remove that secret (or set it to off) and redeploy to switch it back on.',
+}
+const PAUSED = {
+  ok: false,
+  error: 'agent_paused',
+  message: 'This agent is paused, so it calls no model. Resume it in ☰ → Access.',
+}
 const HF_NOT_CONNECTED = {
   ok: false,
   error: 'huggingface_not_connected',
   message: 'Hugging Face models need HF_TOKEN stored as this environment’s secret, then a redeploy (README → Add Hugging Face models).',
 }
 
-// THE OWNER'S DOOR, before anything under /api does any work: no key stored
-// is a 503 that says so (the agent spends nothing on anyone's behalf), a
-// missing or wrong key a 401.
+// THE OWNER'S DOOR, before anything under /api does any work: the hard kill
+// switch on is a 503 for everyone, the owner too; no key stored is a 503
+// that says so (the agent spends nothing on anyone's behalf), a missing or
+// wrong key a 401.
 app.use('/api/*', async (c, next) => {
+  if (killSwitchOn(c.env)) return c.json(KILLED, 503)
   if (!accessConfigured(c.env)) return c.json(NOT_CONFIGURED, 503)
   const presented = bearer(c.req.header('authorization'))
   if (!presented || !(await keyMatches(presented, c.env.AGENT_ACCESS_KEY as string))) {
@@ -129,7 +141,18 @@ app.delete('/api/memories/:id', async (c) => {
   return (await c.var.memory.forget(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
+// The pause — the owner's kill switch in the page. GET says whether it is on,
+// PUT {paused} flips it.
+app.get('/api/state', async (c) => c.json({ ok: true, paused: await c.var.memory.isPaused() }))
+
+app.put('/api/state', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { paused?: unknown } | null
+  if (typeof body?.paused !== 'boolean') return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true} or {"paused": false}' }, 400)
+  return c.json({ ok: true, paused: await c.var.memory.setPaused(body.paused) })
+})
+
 app.post('/api/chat', async (c) => {
+  if (await c.var.memory.isPaused()) return c.json(PAUSED, 503)
   const parsed = ChatRequest.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ ok: false, error: 'invalid_chat', message: parsed.error.issues.map((i) => i.message).join('; ') }, 400)
   const { model = modelKey('workers-ai', DEFAULT_MODEL), messages } = parsed.data
@@ -170,6 +193,7 @@ app.get('/health', (c) => {
     name: API_NAME,
     environment: env?.ENVIRONMENT ?? 'unknown',
     access: accessConfigured(env) ? 'configured' : 'not configured',
+    killSwitch: killSwitchOn(env) ? 'on' : 'off',
     huggingface: huggingfaceConnected(env) ? 'connected' : 'not connected',
     models: {
       default: modelKey('workers-ai', DEFAULT_MODEL),
@@ -177,7 +201,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: [...TOOL_NAMES],
-    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', health: '/health' },
+    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', state: '/api/state', health: '/health' },
   })
 })
 
