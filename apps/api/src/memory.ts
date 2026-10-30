@@ -1,11 +1,12 @@
 import { DurableObject } from 'cloudflare:workers'
+import { MAX_SKILLS, type Skill } from './skills'
 
 // THE AGENT'S MEMORY: one SQLite-backed Durable Object per environment, named
 // `owner` (memoryOf below). It keeps what outlives a chat — the facts the
 // agent was asked to remember, its owner's notes and to-dos, its owner's
 // library (the images it drew, the answers they saved), the models its owner
-// added in the page, its settings (paused? which image model?), and a log of
-// the tools it called — and nothing else: a conversation lives in the owner's browser, so the
+// added in the page, the skills its owner wrote, its settings (paused? which
+// image model?), and a log of the tools it called — and nothing else: a conversation lives in the owner's browser, so the
 // Worker never stores what was said. Reached over RPC, so every method here
 // is the whole of what the Worker can ask of it.
 
@@ -64,6 +65,9 @@ export interface MemoryStore {
   saveItem(text: string, source: string): Promise<Saved>
   listSaved(): Promise<Saved[]>
   deleteSaved(id: number): Promise<boolean>
+  listSkills(): Promise<Skill[]>
+  saveSkill(skill: Skill): Promise<Skill>
+  deleteSkill(name: string): Promise<boolean>
   getSetting(key: SettingKey): Promise<string | null>
   setSetting(key: SettingKey, value: string): Promise<void>
 }
@@ -137,6 +141,12 @@ export class AgentMemory extends DurableObject implements MemoryStore {
           text TEXT NOT NULL,
           source TEXT NOT NULL,
           created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS skills (
+          name TEXT PRIMARY KEY,
+          description TEXT NOT NULL,
+          instructions TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS activity (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,6 +247,30 @@ export class AgentMemory extends DurableObject implements MemoryStore {
   async setPaused(paused: boolean): Promise<boolean> {
     await this.setSetting('paused', paused ? '1' : '0')
     return paused
+  }
+
+  // SKILLS the owner wrote (skills.ts): one per name, at most MAX_SKILLS.
+  async listSkills(): Promise<Skill[]> {
+    return this.ctx.storage.sql.exec<Skill>('SELECT name, description, instructions FROM skills ORDER BY name').toArray().map((r) => ({ ...r }))
+  }
+
+  async saveSkill(skill: Skill): Promise<Skill> {
+    const sql = this.ctx.storage.sql
+    const exists = sql.exec('SELECT 1 FROM skills WHERE name = ?', skill.name).toArray().length > 0
+    if (!exists && sql.exec<{ n: number }>('SELECT count(*) AS n FROM skills').one().n >= MAX_SKILLS) throw new Error(`at most ${MAX_SKILLS} skills`)
+    sql.exec(
+      `INSERT INTO skills (name, description, instructions, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (name) DO UPDATE SET description = excluded.description, instructions = excluded.instructions, updated_at = excluded.updated_at`,
+      skill.name,
+      skill.description,
+      skill.instructions,
+      new Date().toISOString(),
+    )
+    return skill
+  }
+
+  async deleteSkill(name: string): Promise<boolean> {
+    return this.ctx.storage.sql.exec('DELETE FROM skills WHERE name = ?', name).rowsWritten > 0
   }
 
   async getSetting(key: SettingKey | 'paused'): Promise<string | null> {

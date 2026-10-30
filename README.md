@@ -119,10 +119,13 @@ and a sleeping Space wakes on the first call, which can take a while.
 | `wikipedia` | an article's summary and link (any language) |
 | `dictionary` | what a word means, from Wiktionary |
 | `hackerNews` | tech news: the front page, or stories on a topic |
-| `arxiv` | research papers |
+| `papers` | scholarly papers on a topic from OpenAlex, by relevance, citations or date |
+| `paper` | one paper by DOI: details, abstract, who cites it, and whether it exists at all |
+| `arxiv` | preprints on arXiv |
 | `books` | books on Open Library |
 | `readPage` | reads a web page at a URL as text |
 | `webSearch` | searches the web (only once `TAVILY_API_KEY` is stored) |
+| `useSkill` | loads a skill's instructions when a request matches it |
 | `generateImage` | draws a picture and shows it in the chat |
 
 Every model, tools or not, is told the 30 most recent facts in its system
@@ -158,6 +161,44 @@ clears it.
   the default) or FLUX.2 [klein] 4B, [klein] 9B or [dev] (best quality,
   slowest). It shows in the chat and goes into your library. A model only
   ever learns an image's number, never its contents.
+
+## Skills
+
+A skill tells the agent how to do one kind of task well. The agent sees each
+skill's name and description, and loads the instructions only when a request
+matches one, so it can know many tasks without carrying them all in every
+prompt. Seven come built in:
+
+| Skill | For |
+|---|---|
+| `research-brief` | a research question answered from papers and sources, with citations |
+| `paper-summary` | one paper summarised from a title, DOI or link |
+| `literature-review` | the key papers on a topic, its themes and its gaps |
+| `citation-check` | whether references exist and match, before you trust or cite them |
+| `daily-briefing` | weather, headlines and open to-dos |
+| `trip-planner` | weather, places, local-currency costs and a checklist |
+| `decision-helper` | options scored against what matters to you |
+
+Settings (☰) → **Skills** shows them all. Write your own there, or edit a
+built-in and save it to make it yours; **Reset to built-in** brings the
+original back.
+
+## Research
+
+`papers` and `paper` read [OpenAlex](https://openalex.org), an open index of
+some 250 million papers, books and datasets. Searches match titles and
+abstracts. `paper` looks a work up by DOI, and says plainly when there is no
+such work, which is how `citation-check` catches invented references. The
+agent cites only works a tool returned.
+
+OpenAlex needs no key, but keyless calls share a small daily budget per IP
+address, and on Workers that's shared with everyone else. For the agent's own
+budget, get a free key at [openalex.org/settings/api](https://openalex.org/settings/api)
+and store it, then redeploy:
+
+```bash
+orun secrets set OPENALEX_API_KEY --org <ws> --env prod
+```
 
 ## Your library, and keeping what matters
 
@@ -272,6 +313,7 @@ Two ways to stop the agent, both reversible:
 | `GET /api/images/<id>` | an image the agent drew (JPEG or PNG) |
 | `GET /api/images`, `DELETE /api/images/<id>` | the library's images |
 | `GET /api/saved`, `POST /api/saved` (`{text, source?}`), `DELETE /api/saved/<id>` | saved answers |
+| `GET /api/skills`, `PUT /api/skills/<name>` (`{description, instructions}`), `DELETE /api/skills/<name>` | the skills, built in and your own |
 | `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
 | `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?}`) | the pause, and which model draws images |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |

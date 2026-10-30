@@ -17,8 +17,8 @@ describe("GET /health", () => {
       huggingface: "not connected",
       models: { default: "workers-ai:@cf/moonshotai/kimi-k2.6", "workers-ai": 12, configured: 0 },
       webSearch: "not connected",
-      tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "books", "readPage", "generateImage"],
-      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", notes: "/api/notes", images: "/api/images", saved: "/api/saved", state: "/api/state", activity: "/api/activity", health: "/health" },
+      tools: ["remember", "recall", "forget", "addNote", "listNotes", "updateNote", "deleteNote", "currentTime", "calculate", "exchangeRate", "weather", "news", "wikipedia", "dictionary", "hackerNews", "arxiv", "papers", "paper", "books", "readPage", "useSkill", "generateImage"],
+      endpoints: { chat: "/api/chat", models: "/api/models", memories: "/api/memories", notes: "/api/notes", images: "/api/images", saved: "/api/saved", skills: "/api/skills", state: "/api/state", activity: "/api/activity", health: "/health" },
     });
   });
 

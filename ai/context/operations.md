@@ -136,6 +136,8 @@ Caveats that matter:
   - `TAVILY_API_KEY` — web search: with it the agent is offered
     `webSearch` (Tavily); without it, `news` (Google News RSS) and
     `readPage` still work, keyless;
+  - `OPENALEX_API_KEY` — optional: the `papers` and `paper` tools' own
+    OpenAlex budget; without it they share the keyless one;
   - `AGENT_KILL_SWITCH` — the hard kill switch: `on` (true, 1, yes) and every
     `/api` route answers `503` to everyone, the owner too, until it is set
     `off` and the Worker redeployed.
@@ -175,6 +177,7 @@ orun integrations list --org <ws> --json && orun cloud check --org <ws>
 | stop the agent now | pause it in the page (☰ → Access → Pause the agent): chat answers `503` and no model is called, no redeploy; Resume undoes it. If the key may have leaked: store `AGENT_KILL_SWITCH` = `on` and deploy, then rotate the key, set the switch `off` and deploy |
 | turn on web search | store `TAVILY_API_KEY` and deploy; `/health` answers `"webSearch":"connected"` (README, "The news and the web") |
 | add a lookup source | a function in `apps/api/src/lookup.ts` (keyless, answers with a `url`, `{ error }` on failure), its `tool()` in `agent.ts` via `look(…, { fromTheWeb })`, its name in `TOOL_NAMES`, a stand-in route under `/lookup/<service>` in `tests/api/src/helpers.ts`, a test |
+| add a built-in skill | an entry in `BUILT_IN_SKILLS` (`apps/api/src/skills.ts`): a name, when to use it, and steps naming the tools; the owner's own are written in ☰ → Skills |
 | see what the agent did | ☰ → Access → What it did, or `GET /api/activity`: every tool call and whether a guard blocked it (README, "What keeps it safe") |
 | rotate the access key | store a new `AGENT_ACCESS_KEY` and deploy; every browser holding the old one is asked again |
 | headless credentials | `ORUN_TOKEN` (workspace-scoped) + `GITHUB_TOKEN` |

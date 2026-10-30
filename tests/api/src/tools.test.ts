@@ -238,3 +238,69 @@ describe("the library", () => {
     }
   });
 });
+
+describe("research: papers and paper (OpenAlex)", () => {
+  it("searches papers by title and abstract, sorted as asked, with the abstract rebuilt", async () => {
+    const x = toolEnv();
+    const { result } = await use(x, "papers", { query: "retrieval, augmented: generation", sort: "citations", fromYear: 2019 });
+    expect(result.papers[0]).toEqual({
+      id: "W1", title: "RAG (cited_by_count:desc)", year: 2020, authors: ["P. Lewis"], venue: "NeurIPS", citations: 3046,
+      doi: "10.1234/w1", url: "https://doi.org/10.1234/w1", openAccess: "https://arxiv.org/pdf/W1", abstract: "Large models retrieve.",
+    });
+    const call = web.calls.filter((c) => c.path.startsWith("/lookup/openalex/works?")).at(-1)?.path ?? "";
+    expect(new URLSearchParams(call.split("?")[1]).get("filter")).toBe("title_and_abstract.search:retrieval augmented generation,from_publication_date:2019-01-01");
+  });
+
+  it("finds one paper by DOI with who cites it, says plainly when a reference does not exist, and sends its own key", async () => {
+    const x = env({ AGENT_ACCESS_KEY: KEY, LOOKUP_URL: web.lookup, OPENALEX_API_KEY: "oa-test-key" });
+    const found = (await use(x, "paper", { id: "https://doi.org/10.1234/w1" })).result;
+    expect(found).toMatchObject({ exists: true, id: "W1", title: "RAG", references: 60, mostCitedBy: [{ title: "A paper citing it", citations: 50 }] });
+    expect(web.calls.at(-1)?.path).toContain("api_key=oa-test-key");
+    const missing = (await use(x, "paper", { id: "10.9999/invented" })).result;
+    expect(missing).toMatchObject({ exists: false });
+    expect(missing.error).toMatch(/may be wrong or invented/);
+    expect((await use(x, "paper", { id: "not a doi" })).result.error).toMatch(/give a DOI/);
+  });
+});
+
+describe("skills", () => {
+  const req = (x: ReturnType<typeof env>, method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: auth(), ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, x);
+
+  it("lists the built-in skills in the prompt, and loads one's instructions on demand", async () => {
+    const x = toolEnv();
+    const { result } = await use(x, "useSkill", { name: "citation-check" });
+    expect(result.name).toBe("citation-check");
+    expect(result.instructions).toContain("Never \"fix\" a reference");
+    expect(x.asked[0]?.system).toContain("- research-brief: Answer a research question properly");
+    expect((await use(x, "useSkill", { name: "nope" })).result.error).toMatch(/no skill called "nope"; the skills are: research-brief/);
+  });
+
+  it("the owner writes their own, customises a built-in, and resets it", async () => {
+    const x = toolEnv();
+    const mine = { description: "Review my week", instructions: "1. listNotes. 2. Say what got done." };
+    expect((await req(x, "PUT", "/api/skills/weekly-review", mine)).status).toBe(200);
+    expect((await req(x, "PUT", "/api/skills/daily-briefing", { description: "Short", instructions: "Weather only." })).status).toBe(200);
+    const { skills } = await json(await req(x, "GET", "/api/skills"));
+    expect(skills.find((s: { name: string }) => s.name === "weekly-review")).toMatchObject({ source: "owner", ...mine });
+    expect(skills.find((s: { name: string }) => s.name === "daily-briefing")).toMatchObject({ source: "customised", instructions: "Weather only." });
+    expect((await use(x, "useSkill", { name: "daily-briefing" })).result.instructions).toBe("Weather only.");
+
+    expect((await req(x, "DELETE", "/api/skills/daily-briefing")).status).toBe(200);
+    expect((await use(x, "useSkill", { name: "daily-briefing" })).result.instructions).toContain("`weather` for the owner's city");
+    expect((await req(x, "DELETE", "/api/skills/research-brief")).status).toBe(409);
+    expect((await req(x, "DELETE", "/api/skills/never-was")).status).toBe(404);
+  });
+
+  it("refuses a bad name, empty parts, or a secret in a skill", async () => {
+    const x = toolEnv();
+    for (const [name, body] of [
+      ["Bad Name", { description: "d", instructions: "i" }],
+      ["ok-name", { description: "", instructions: "i" }],
+      ["ok-name", { description: "d", instructions: "x".repeat(8001) }],
+    ] as const) {
+      expect((await req(x, "PUT", `/api/skills/${encodeURIComponent(name)}`, body)).status, name).toBe(400);
+    }
+    expect((await json(await req(x, "PUT", "/api/skills/login", { description: "d", instructions: "my password is Hunter2Secret" }))).error).toBe("looks_like_secret");
+  });
+});

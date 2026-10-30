@@ -233,6 +233,18 @@ export async function webStandIn() {
       return send(200, "application/atom+xml", `<feed><entry><id>http://arxiv.org/abs/2610.1v1</id><title>A Paper\n  on RAG</title><published>2026-10-29T00:00:00Z</published><summary>We study it.</summary><author><name>A. Author</name></author><link href="https://arxiv.org/abs/2610.1v1" rel="alternate" type="text/html"/></entry></feed>`);
     if (url.pathname === "/lookup/books/search.json")
       return lookup({ docs: [{ key: "/works/OL1W", title: "The God of Small Things", author_name: ["Arundhati Roy"], first_publish_year: 1997, number_of_pages_median: 357, subject: ["Fiction", "award:booker"] }] });
+    // OpenAlex: a search, one work by DOI or id, and the works citing it.
+    const W = (id: string, title: string, year: number, cites: number) => ({
+      id: `https://openalex.org/${id}`, doi: `https://doi.org/10.1234/${id.toLowerCase()}`, title, publication_year: year, cited_by_count: cites,
+      authorships: [{ author: { display_name: "P. Lewis" } }], primary_location: { source: { display_name: "NeurIPS" } },
+      open_access: { oa_url: `https://arxiv.org/pdf/${id}` }, abstract_inverted_index: { "Large": [0], "models": [1], "retrieve.": [2] },
+    });
+    if (url.pathname === "/lookup/openalex/works") {
+      if (url.searchParams.get("filter")?.startsWith("cites:")) return lookup({ results: [W("W2", "A paper citing it", 2023, 50)] });
+      return lookup({ meta: { count: 1 }, results: [W("W1", `RAG (${url.searchParams.get("sort") ?? "relevance"})`, 2020, 3046)] });
+    }
+    if (url.pathname === "/lookup/openalex/works/doi%3A10.1234%2Fw1" || url.pathname === "/lookup/openalex/works/W1") return lookup({ ...W("W1", "RAG", 2020, 3046), referenced_works_count: 60, type: "article" });
+    if (url.pathname.startsWith("/lookup/openalex/works/")) return send(404, "application/json", "{}");
     if (url.pathname === "/big") return send(200, "text/plain", "x".repeat(50_000));
     if (url.pathname === "/file.pdf") return send(200, "application/pdf", "%PDF-1.4");
     if (url.pathname === "/search") {

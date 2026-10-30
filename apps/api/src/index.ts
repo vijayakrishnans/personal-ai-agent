@@ -9,6 +9,7 @@ import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseH
 import { SpaceError } from './spaces'
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, imageModel, imageType } from './images'
 import { hasSecret } from './secrets'
+import { BUILT_IN_SKILLS, MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, SKILL_NAME, skillsOnOffer } from './skills'
 import { page } from './ui'
 import { webSearchConnected } from './web'
 
@@ -241,6 +242,43 @@ app.delete('/api/saved/:id', async (c) => {
   return id && (await c.var.memory.deleteSaved(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
+// SKILLS: the built-in ones and the owner's own (skills.ts). PUT writes one
+// (a built-in's name replaces it); DELETE removes the owner's — a built-in
+// comes back as it was.
+app.get('/api/skills', async (c) => c.json({ ok: true, skills: skillsOnOffer(await c.var.memory.listSkills()) }))
+
+app.put('/api/skills/:name', async (c) => {
+  const name = c.req.param('name')
+  const body = (await c.req.json().catch(() => null)) as { description?: unknown; instructions?: unknown } | null
+  const description = typeof body?.description === 'string' ? body.description.trim() : ''
+  const instructions = typeof body?.instructions === 'string' ? body.instructions.trim() : ''
+  if (!SKILL_NAME.test(name) || !description || description.length > MAX_SKILL_DESCRIPTION || !instructions || instructions.length > MAX_SKILL_INSTRUCTIONS) {
+    return c.json(
+      {
+        ok: false,
+        error: 'invalid_skill',
+        message: `a name of lowercase letters, digits and dashes (2-40), a description of 1-${MAX_SKILL_DESCRIPTION} characters and instructions of 1-${MAX_SKILL_INSTRUCTIONS}`,
+      },
+      400,
+    )
+  }
+  if (hasSecret(`${description}\n${instructions}`)) return c.json(LOOKS_LIKE_SECRET, 400)
+  try {
+    return c.json({ ok: true, skill: await c.var.memory.saveSkill({ name, description, instructions }) })
+  } catch (error) {
+    return c.json({ ok: false, error: 'too_many_skills', message: String((error as Error).message) }, 409)
+  }
+})
+
+app.delete('/api/skills/:name', async (c) => {
+  const name = c.req.param('name')
+  if (!(await c.var.memory.deleteSkill(name))) {
+    const builtIn = BUILT_IN_SKILLS.some((s) => s.name === name)
+    return c.json({ ok: false, error: builtIn ? 'built_in' : 'not_found', ...(builtIn ? { message: 'a built-in skill cannot be deleted; write one with its name to replace it' } : {}) }, builtIn ? 409 : 404)
+  }
+  return c.json({ ok: true })
+})
+
 // The activity log: every tool the agent called, allowed or blocked.
 app.get('/api/activity', async (c) => c.json({ ok: true, activity: await c.var.memory.listActivity(100) }))
 
@@ -319,7 +357,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: toolNames(env),
-    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', saved: '/api/saved', state: '/api/state', activity: '/api/activity', health: '/health' },
+    endpoints: { chat: '/api/chat', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', saved: '/api/saved', skills: '/api/skills', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 

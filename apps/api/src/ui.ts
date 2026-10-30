@@ -7,7 +7,8 @@
 // stay in the browser (localStorage); models and memories are read from and
 // written to /api with the key as a bearer token. The sidebar lists what the
 // agent remembers by space; ☰ opens the settings — the knowledge graph of
-// those spaces, the owner's notes and to-dos, their library (every image the
+// those spaces, the owner's notes and to-dos, the skills it follows (built in
+// or the owner's own), their library (every image the
 // agent drew, every answer they saved), the models — chat and image — and
 // access: the kill switch, what the agent did, and locking this browser.
 // Every message can be copied, added to the knowledge, or saved to the
@@ -63,6 +64,16 @@ dialog#to-knowledge textarea{width:100%;min-height:120px;resize:vertical}
 #library-saved li.open p{max-height:none}
 #library-saved .row button{font-size:12px;padding:2px 8px}
 a.button{border:1px solid var(--line);border-radius:8px;color:inherit;text-decoration:none}
+#skills-wrap{display:flex;gap:20px;min-height:100%}
+#skills-list{width:300px;flex:none;display:grid;gap:6px;align-content:start}
+#skills-list button{text-align:left;display:grid;gap:2px;padding:8px 10px}
+#skills-list button[aria-current="true"]{background:var(--me)}
+#skills-list small{color:var(--muted);font-size:12px}
+#skill-form{flex:1;min-width:0;align-content:start}
+#skill-form .row{align-items:center}
+#skill-form textarea{min-height:300px;resize:vertical;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.badge{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:0 5px;margin-left:6px}
+@media (max-width:760px){#skills-wrap{flex-direction:column}#skills-list{width:auto}}
 #notes-lists{display:grid;gap:20px}
 #notes-lists li{align-items:center}
 #notes-lists li label{display:flex;gap:8px;align-items:flex-start;flex:1;cursor:pointer}
@@ -170,6 +181,7 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
       <div id="tabs" role="tablist">
         <button type="button" role="tab" data-tab="knowledge">Knowledge</button>
         <button type="button" role="tab" data-tab="notes">Notes</button>
+        <button type="button" role="tab" data-tab="skills">Skills</button>
         <button type="button" role="tab" data-tab="library">Library</button>
         <button type="button" role="tab" data-tab="models">Models</button>
         <button type="button" role="tab" data-tab="access">Access</button>
@@ -208,6 +220,20 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
           <datalist id="list-names"></datalist>
         </section>
         <div id="notes-lists"></div>
+      </div>
+    </section>
+    <section class="tab" id="tab-skills" role="tabpanel" hidden>
+      <div id="skills-wrap">
+        <div id="skills-list"></div>
+        <form class="stack" id="skill-form">
+          <h2 id="skill-title">New skill</h2>
+          <p class="hint">A skill tells the agent how to do one kind of task. It sees each skill's name and description, and loads the instructions only when a request matches.</p>
+          <input id="skill-name" placeholder="name — e.g. weekly-review (lowercase, dashes)" pattern="[a-z0-9][a-z0-9-]{1,39}" required>
+          <input id="skill-description" placeholder="When to use it — e.g. Review my week: notes done, notes open, what to plan" maxlength="200" required>
+          <textarea id="skill-instructions" placeholder="Steps the agent follows, and the tools it should use." maxlength="8000" required></textarea>
+          <div class="row"><button class="primary" id="skill-save">Save skill</button><button type="button" id="skill-new">New skill</button><button type="button" id="skill-delete" class="danger" hidden>Delete</button></div>
+          <p class="hint" id="skill-note"></p>
+        </form>
       </div>
     </section>
     <section class="tab" id="tab-library" role="tabpanel" hidden>
@@ -361,6 +387,33 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
     $('knowledge-note').textContent = text.length > 500 ? 'Shortened to 500 characters: keep the part worth knowing.' : '';
     $('to-knowledge').showModal();
     $('knowledge-text').focus();
+  }
+
+  // SKILLS: the list on the left, the one being written on the right. A
+  // built-in can be customised (saved under its name) and reset (deleted).
+  let skills = [];
+  let editing = null;
+  async function loadSkills() {
+    skills = (await api('/api/skills')).skills;
+    $('skills-list').replaceChildren(...skills.map((sk) => {
+      const b = el('button', { type: 'button' },
+        el('strong', { textContent: sk.name }, ...(sk.source === 'owner' ? [] : [el('span', { className: 'badge', textContent: sk.source })])),
+        el('small', { textContent: sk.description }));
+      b.setAttribute('aria-current', String(editing === sk.name));
+      b.onclick = () => editSkill(sk);
+      return b;
+    }));
+  }
+  function editSkill(sk) {
+    editing = sk ? sk.name : null;
+    $('skill-title').textContent = sk ? sk.name : 'New skill';
+    $('skill-name').value = sk ? sk.name : ''; $('skill-name').readOnly = !!sk;
+    $('skill-description').value = sk ? sk.description : '';
+    $('skill-instructions').value = sk ? sk.instructions : '';
+    $('skill-delete').hidden = !sk || sk.source === 'built-in';
+    $('skill-delete').textContent = sk && sk.source === 'customised' ? 'Reset to built-in' : 'Delete';
+    $('skill-note').textContent = sk && sk.source === 'built-in' ? 'Built in. Edit and save to make it yours.' : '';
+    for (const b of document.querySelectorAll('#skills-list button')) b.setAttribute('aria-current', String(b.querySelector('strong').firstChild.textContent === editing));
   }
 
   // THE LIBRARY: every image the agent drew, and every answer saved.
@@ -606,11 +659,12 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
 
   function tab(name) {
     for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
-    for (const t of ['knowledge', 'notes', 'library', 'models', 'access']) $('tab-' + t).hidden = t !== name;
+    for (const t of ['knowledge', 'notes', 'skills', 'library', 'models', 'access']) $('tab-' + t).hidden = t !== name;
     store.set('agent.tab', name);
     if (name === 'access') loadActivity().catch(() => {});
     if (name === 'notes') loadNotes().catch(() => {});
     if (name === 'library') loadLibrary().catch(() => {});
+    if (name === 'skills') loadSkills().catch(() => {});
   }
   function openSettings(name) { tab(name || store.get('agent.tab', 'knowledge')); if (!$('settings').open) $('settings').showModal(); }
 
@@ -666,6 +720,20 @@ dialog#settings::backdrop{background:rgb(0 0 0 / .45)}
   $('image-model').onchange = async () => {
     try { chosenImageModel = (await api('/api/state', { method: 'PUT', body: JSON.stringify({ imageModel: $('image-model').value }) })).imageModel; $('image-note').textContent = 'Saved: new pictures use it.'; }
     catch (err) { $('image-note').textContent = err.message; }
+  };
+  $('skill-new').onclick = () => { editSkill(null); $('skill-name').focus(); };
+  $('skill-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $('skill-name').value.trim();
+    try {
+      await api('/api/skills/' + encodeURIComponent(name), { method: 'PUT', body: JSON.stringify({ description: $('skill-description').value, instructions: $('skill-instructions').value }) });
+      editing = name; await loadSkills(); editSkill(skills.find((sk) => sk.name === name)); $('skill-note').textContent = 'Saved. The agent uses it from the next message.';
+    } catch (err) { $('skill-note').textContent = err.message; }
+  };
+  $('skill-delete').onclick = async () => {
+    if (!editing || !confirm('Delete the skill "' + editing + '"?')) return;
+    try { await api('/api/skills/' + encodeURIComponent(editing), { method: 'DELETE' }); const was = editing; await loadSkills(); editSkill(skills.find((sk) => sk.name === was) || null); }
+    catch (err) { $('skill-note').textContent = err.message; }
   };
   $('knowledge-cancel').onclick = () => $('to-knowledge').close();
   $('knowledge-form').onsubmit = async (e) => {
