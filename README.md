@@ -246,10 +246,21 @@ whole (the newest 500).
 
 ## The Tools menu, maps and travel
 
-**+ Tools** beside the input asks the agent to use one tool for your next
-message: Web search, Research papers, News, Wikipedia, Weather, Map, Plan a
-trip, Draw an image, Make music or Calculate. It shows as a chip above the input
-(**✕** drops it). The agent is told which you chose; it still decides how.
+**+ Tools** beside the input asks the agent to use tools for your next
+message: Your knowledge, Web search, Research papers, News, Wikipedia,
+Weather, Map, Plan a trip, Draw an image, Make music or Calculate. **Pick
+several to stack them**: the agent must use every one and combine what they
+find, each feeding the next (a place found on the web, then its weather and
+map), fitted to what it knows about you. Its first step has to call a tool, so
+the answer starts from today's facts rather than its training data (a model
+that refuses being made to is simply asked again). Combos pick a set in one
+click: **Where should I go?** (knowledge, web, weather, map), **Up-to-date
+answer** (knowledge, web, news) and **Deep research** (papers, web,
+Wikipedia). The picks show as chips above the input; ✕ drops one.
+
+Every model is also told to trust today's tools over what it learned in
+training, and to answer an open question ("where should I go?") with a
+concrete pick and what it assumed, rather than with questions.
 
 Maps come from **OpenStreetMap**, with no key. `showMap` finds places by name
 (Nominatim), `route` gives the distance and time by car, on foot or by bike
@@ -354,7 +365,7 @@ Two ways to stop the agent, both reversible:
 | Route | Answers |
 |---|---|
 | `GET /` | the agent's page: chat, conversations, model picker, settings |
-| `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…], "mode"?: "web"\|"research"\|"news"\|"wikipedia"\|"weather"\|"map"\|"travel"\|"image"\|"calculate"}` → `{"text", "model", "tools", "images"?, "maps"?}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
+| `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…], "modes"?: [one or more of "knowledge"\|"web"\|"research"\|"news"\|"wikipedia"\|"weather"\|"map"\|"travel"\|"image"\|"music"\|"calculate"]}` → `{"text", "model", "tools", "images"?, "maps"?, "tracks"?}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/conversations` (`?q=`, `?limit=`), `GET`/`PUT`/`DELETE /api/conversations/<id>` (`{messages, title?}`) | your conversations: the newest first, or those a search finds; one opened, saved (secrets taken out) or deleted |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
 | `GET /api/notes`, `POST /api/notes` (`{text, list?, keepDays?: 2\|7\|null}`), `PATCH /api/notes/<id>` (`{done?, text?, list?, keepDays?}`), `DELETE /api/notes/<id>` | your notes and to-dos; each expires `keepDays` from now (2 by default), `null` for good |

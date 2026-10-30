@@ -217,6 +217,53 @@ describe("the tools menu", () => {
   });
 });
 
+describe("stacking tools", () => {
+  const send = (x: ReturnType<typeof env>, content: string, modes: string[]) =>
+    app.request("/api/chat", { method: "POST", headers: auth(), body: JSON.stringify({ messages: [{ role: "user", content }], modes }) }, x);
+
+  it("tells the model to use every tool picked and combine them, and makes its first step call one", async () => {
+    const x = owner();
+    expect((await send(x, "where should I go this weekend?", ["map", "knowledge", "weather", "web"])).status).toBe(200);
+    const asked = x.asked[0];
+    expect(asked?.system).toContain("your owner stacked 4 tools from the menu. Use every one of them before you answer");
+    expect(asked?.system).toMatch(/- Use what you know about your owner[\s\S]*- Look this up before answering[\s\S]*- Use `weather`[\s\S]*- Show it on a map/);
+    expect(asked?.system).toContain("use the first one's results for the next");
+    expect(asked?.toolChoice).toBe("required");
+    // The stand-in answered in words though made to call a tool, as a model
+    // might: the agent asked again, letting it choose.
+    expect(x.asked.map((a) => a.toolChoice)).toEqual(["required", "auto"]);
+  });
+
+  it("only the first step is made to call a tool; the rest choose", async () => {
+    const x = owner();
+    await send(x, `call weather {"place":"Munnar","country":"IN"}`, ["weather"]);
+    expect(x.asked.slice(-2).map((a) => a.toolChoice)).toEqual(["required", "auto"]);
+    expect(x.asked).toHaveLength(2);
+  });
+
+  it("knowledge alone forces nothing: what it remembers is already in the prompt", async () => {
+    const x = owner();
+    await send(x, "what should I eat?", ["knowledge"]);
+    expect(x.asked.map((a) => a.toolChoice)).toEqual(["auto"]);
+    expect(x.asked.at(-1)?.system).toContain("your owner chose a tool from the menu: Use what you know about your owner");
+  });
+
+  it("a model that refuses to be made to call a tool is asked as it would be", async () => {
+    const x = owner();
+    const res = await send(x, "noforce: where should I go?", ["web", "weather"]);
+    expect(res.status).toBe(200);
+    expect((await json(res)).text).toBe("Echo: noforce: where should I go?");
+  });
+
+  it("tells every model to trust today's tools over its training, and to answer rather than ask", async () => {
+    const x = owner();
+    await send(x, "tell me the best place to visit", []);
+    expect(x.asked.at(-1)?.system).toContain("trust what your tools return today over what you remember");
+    expect(x.asked.at(-1)?.system).toContain("do not answer with questions");
+    expect((await send(x, "x", ["teleport"])).status).toBe(400);
+  });
+});
+
 describe("the page's script", () => {
   const script = () => {
     const html = page("Personal Ai Agent");

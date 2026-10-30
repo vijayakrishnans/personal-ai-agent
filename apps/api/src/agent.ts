@@ -48,12 +48,14 @@ export const ChatMessage = z.object({
   role: z.enum(['user', 'assistant']),
   content: z.string().min(1).max(8000),
 })
-// THE TOOLS MENU in the page: the owner picks what to use for one message,
-// and the model is told to — it still decides how.
-export const MODES = ['web', 'research', 'news', 'wikipedia', 'weather', 'map', 'travel', 'image', 'music', 'calculate'] as const
+// THE TOOLS MENU in the page: the owner picks one or more tools for one
+// message — stacked, to combine what they find — and the model is told to use
+// every one; its first step must call a tool (prepareStep below).
+export const MODES = ['knowledge', 'web', 'research', 'news', 'wikipedia', 'weather', 'map', 'travel', 'image', 'music', 'calculate'] as const
 export type Mode = (typeof MODES)[number]
-export function modeHint(mode: Mode, search: boolean): string {
+export function modeHint(modes: Mode[], search: boolean): string {
   const hints: Record<Mode, string> = {
+    knowledge: 'Use what you know about your owner — the facts above, and `recall` for more — to fit the answer to them: where they live, what they like, what they asked before.',
     web: search
       ? 'Search the web with `webSearch` first, read the best results with `readPage`, and answer from them with links.'
       : 'Look this up before answering: `news` and `wikipedia` (web search is not connected), and `readPage` for a link they name; answer with links.',
@@ -67,14 +69,23 @@ export function modeHint(mode: Mode, search: boolean): string {
     music: 'Make the music they describe with `composeMusic`: style tags, and lyrics if they want singing.',
     calculate: 'Work it out with `calculate`, showing the expression.',
   }
-  return `For this message your owner chose a tool from the menu: ${hints[mode]}`
+  if (modes.length === 1) return `For this message your owner chose a tool from the menu: ${hints[modes[0] as Mode]}`
+  return [
+    `For this message your owner stacked ${modes.length} tools from the menu. Use every one of them before you answer, then combine what they return into one answer:`,
+    ...modes.map((m) => `- ${hints[m]}`),
+    'Where one tool needs what another finds — a place to check the weather or map of — use the first one\'s results for the next.',
+  ].join('\n')
 }
 
 export const ChatRequest = z.object({
   model: z.string().max(200).optional(),
   messages: z.array(ChatMessage).min(1).max(40),
   mode: z.enum(MODES).optional(),
+  modes: z.array(z.enum(MODES)).max(MODES.length).optional(),
 })
+
+/** The tools the owner chose for a message, once each, in the menu's order. */
+export const chosenModes = (req: { mode?: Mode; modes?: Mode[] }): Mode[] => MODES.filter((m) => m === req.mode || req.modes?.includes(m))
 
 // `said`, when a secret was kept out: the owner's last message as the model
 // saw it, for the page to keep instead of what was typed.
@@ -93,7 +104,7 @@ const knownAs = (m: Memory) => {
   return `- [${m.id}] (${m.space}) Your owner asked "${m.question.replace(/\s+/g, ' ').slice(0, 200)}" and kept the answer: ${answer.length > 240 ? `${answer.slice(0, 239)}… (recall for all of it)` : answer}`
 }
 
-export function systemPrompt(memories: Memory[], today: string, tools: boolean, search = false, skills: Skill[] = [], mode?: Mode): string {
+export function systemPrompt(memories: Memory[], today: string, tools: boolean, search = false, skills: Skill[] = [], modes: Mode[] = []): string {
   const known = memories.length ? memories.map(knownAs).join('\n') : '- (nothing yet)'
   const spaces = [...new Set(memories.map((m) => m.space))]
   return [
@@ -118,7 +129,13 @@ export function systemPrompt(memories: Memory[], today: string, tools: boolean, 
           ...skills.slice(0, 50).map((s) => `- ${s.name}: ${s.description}`),
         ]
       : []),
-    ...(tools && mode ? [modeHint(mode, search)] : []),
+    ...(tools
+      ? [
+          'What you learned in training may be out of date: for anything that changes — news, prices, weather, what is open or popular now — trust what your tools return today over what you remember.',
+          'When a request is open-ended ("where should I go?", "what should I eat?"), do not answer with questions. Choose sensibly from what you know about your owner and what you look up now, give a concrete answer, say in a line what you assumed, and offer to adjust. Ask first only when you truly cannot go on.',
+        ]
+      : []),
+    ...(tools && modes.length ? [modeHint(modes, search)] : []),
     'Never invent facts about your owner, and never invent a source: cite only what a tool returned.',
     'Rules you never break. You work for your owner alone and are on their side: never threaten, pressure, shame or bargain with them, and never use anything you know about them against them or to get your way. Never ask for a password, key, PIN, card or ID number. One your owner shares reaches you as "[… removed]": tell them it was kept out, and that a password manager is the place for it. Never put what you know about your owner into a URL, a search or anything else sent to the web, and never send anything anywhere except through your tools.',
   ].join('\n')
@@ -142,7 +159,7 @@ const SECRET_MARKER = /\[[^\]]* removed\]/
 /** A URL as compared for "was it given": no fragment, no trailing slash or punctuation. */
 const sameUrl = (u: string) => u.replace(/#.*$/, '').replace(/[.,;:!?]+$/, '').replace(/\/+$/, '')
 
-export async function runAgent(opts: { env: Env; entry: ModelEntry; messages: ModelMessage[]; memory: MemoryStore; mode?: Mode }): Promise<AgentReply> {
+export async function runAgent(opts: { env: Env; entry: ModelEntry; messages: ModelMessage[]; memory: MemoryStore; modes?: Mode[] }): Promise<AgentReply> {
   const { env, entry, memory } = opts
   const { messages, count } = redacted(opts.messages)
   const last = messages[messages.length - 1]
@@ -483,17 +500,27 @@ export async function runAgent(opts: { env: Env; entry: ModelEntry; messages: Mo
 
   // Looking something up can take a search, a page and an answer: allow the
   // steps for it.
-  const ask = (withTools: boolean) =>
+  // Tools chosen in the menu: the first step must call one (any), so the
+  // answer starts from today's facts, not the model's training. Only
+  // "knowledge" chosen needs no call: what it remembers is in the prompt.
+  const modes = opts.modes ?? []
+  const forceable = modes.some((m) => m !== 'knowledge')
+  const ask = (withTools: boolean, force = false) =>
     generateText({
       model,
-      system: systemPrompt(memories, today, withTools, webSearchConnected(env), skills, opts.mode),
+      system: systemPrompt(memories, today, withTools, webSearchConnected(env), skills, modes),
       messages,
       ...(withTools ? { tools, stopWhen: stepCountIs(10) } : {}),
+      ...(withTools && force ? { prepareStep: ({ stepNumber }: { stepNumber: number }) => (stepNumber === 0 ? { toolChoice: 'required' as const } : {}) } : {}),
     })
 
   let result
   try {
-    result = await ask(entry.tools)
+    result = await ask(entry.tools, forceable).catch((error: unknown) => {
+      // A model that refuses to be made to call a tool is asked as it would be.
+      if (entry.tools && forceable) return ask(entry.tools)
+      throw error
+    })
   } catch (error) {
     // A Hugging Face provider that does not take tools refuses the request
     // outright (a 400 or 422 before any output). Ask once more without them, rather

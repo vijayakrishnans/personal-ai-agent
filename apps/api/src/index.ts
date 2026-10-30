@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { z } from 'zod'
-import { runAgent, ChatRequest, toolNames } from './agent'
+import { chosenModes, runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
 import { API_NAME } from './identity'
@@ -402,7 +402,7 @@ app.post('/api/chat', async (c) => {
   if (await c.var.memory.isPaused()) return c.json(PAUSED, 503)
   const parsed = ChatRequest.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ ok: false, error: 'invalid_chat', message: parsed.error.issues.map((i) => i.message).join('; ') }, 400)
-  const { model = modelKey('workers-ai', DEFAULT_MODEL), messages, mode } = parsed.data
+  const { model = modelKey('workers-ai', DEFAULT_MODEL), messages } = parsed.data
   if (messages[messages.length - 1]?.role !== 'user') {
     return c.json({ ok: false, error: 'invalid_chat', message: 'the last message must be the owner’s' }, 400)
   }
@@ -412,7 +412,7 @@ app.post('/api/chat', async (c) => {
   if (entry.provider === 'huggingface' && !huggingfaceConnected(c.env)) return c.json(HF_NOT_CONNECTED, 409)
 
   try {
-    return c.json({ ok: true, ...(await runAgent({ env: c.env, entry, messages, memory: c.var.memory, mode })) })
+    return c.json({ ok: true, ...(await runAgent({ env: c.env, entry, messages, memory: c.var.memory, modes: chosenModes(parsed.data) })) })
   } catch (error) {
     // The model's provider failed, not this Worker: say which. The message
     // is the provider's own; it carries no key of ours.
