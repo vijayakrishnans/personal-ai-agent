@@ -282,6 +282,12 @@ describe("the page's script", () => {
     expect(script()).toContain("https://www.openstreetmap.org/copyright");
     expect(page("x")).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
   });
+
+  it("downloads an answer, or the whole chat, as Markdown", () => {
+    expect(page("x")).toContain('id="download-chat"');
+    expect(script()).toContain("textContent: 'Download', title: 'Download the question and this answer");
+    expect(script()).toContain("type: 'text/markdown;charset=utf-8'");
+  });
 });
 
 describe("the activity log", () => {

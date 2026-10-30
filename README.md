@@ -236,6 +236,10 @@ Under every message:
 - **Save** asks how to keep it: a **note for 2 days** (the default), a **note
   for 7 days**, the **knowledge** (for good), or the **library** (kept whole,
   for you alone; never put in a prompt).
+- **Download** (under an answer) saves your question and the answer as a
+  Markdown file, with its pictures, music and maps listed (map places and
+  directions as links). **Download chat**, at the top, saves the whole
+  conversation the same way. Music has its own Download under the player.
 - **Screenshot** (under an answer) draws your question and the answer, with
   its pictures, as a PNG. It downloads, and is copied to the clipboard when
   the browser allows.
