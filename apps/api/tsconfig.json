@@ -1,0 +1,11 @@
+{
+  "extends": "../../tooling/tsconfig/worker.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,100 @@
+apiVersion: sourceplane.io/v1
+kind: Component
+metadata:
+  name: api
+  description: The Personal AI Agent — a chat page and /api/chat on a plain Cloudflare Worker, answering with Workers AI or the owner's Hugging Face models and Spaces, its memory in a Durable Object (per environment)
+spec:
+  type: cloudflare-worker-turbo
+  lifecycle: production
+  owner: platform
+  # Its pages, attached to it in the workspace's catalog: what the Docs
+  # library shows for it, and what the catalog's docs and runbook checks read.
+  # Generated from what this manifest and its sources declare.
+  docs:
+    overview: docs/overview.md
+    pages:
+      - { path: docs/architecture.md, role: architecture, title: Architecture }
+      - { path: docs/runbook.md, role: runbook, title: Runbook }
+  # `app`, not `api`: a domain and a component share one name space in the
+  # catalog, and a domain called `api` would take this component's place in
+  # it — the API missing from its own catalog.
+  domain: app
+  path: apps/api
+  # No dependsOn: the agent reads no wiring and binds nothing Terraform
+  # makes — Workers AI is the account's own, and its Durable Object is
+  # created by wrangler from the migration in wrangler.jsonc.
+  #
+  # The agent's keys, stored per environment as the product's secrets of the
+  # same names (README → Unlock the agent, Add Hugging Face models). The
+  # Worker reads them at request time (src/env.ts), so no build ever sees
+  # one: the composition's secrets-live step hands those that are set to the
+  # Worker as Worker SECRETS after the deploy (runtimeSecrets below).
+  # BEST-EFFORT references, wire-now-seed-later: a key nobody has stored is
+  # skipped when the job resolves its secrets (no env var, no failure), so a
+  # fresh product deploys, answers /health and says on /api/chat that it is
+  # locked, before its owner has chosen an access key at all.
+  optionalSecretEnv:
+    AGENT_ACCESS_KEY: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/AGENT_ACCESS_KEY"
+    HF_TOKEN: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/HF_TOKEN"
+    HF_MODELS: "secret://org_b4c022cbde054db3bb0e011a7befb2f5/personal-ai-agent/{{ .environment }}/HF_MODELS"
+  subscribe:
+    environments:
+      - name: dev
+        profile: verify
+      - name: stage
+        profile: verify
+        profileRules:
+          - profile: deploy
+            when:
+              triggerRef: github-push-main
+      - name: prod
+        profile: verify
+        profileRules:
+          - profile: deploy
+            when:
+              triggerRef: github-push-main
+  parameters:
+    nodeVersion: "22"
+    pnpmVersion: "10.12.1"
+
+    workspaceDir: ../..
+    appDir: .
+
+    turboFilter: "@app/api"
+    # Committed, not rendered: neither of the Worker's bindings (Workers AI,
+    # its Durable Object) has a resource ID to wire, and the lanes' structure check (`test -f`, before
+    # any build) finds it in a fresh checkout. Per-env names come from `--env`:
+    # personal-ai-agent-api-{stage,prod}.
+    wranglerConfig: wrangler.jsonc
+
+    installCommand: pnpm install --frozen-lockfile
+    buildCommand: pnpm exec turbo run build --filter=@app/api
+    typecheckCommand: pnpm exec turbo run typecheck --filter=@app/api
+
+    dryRunCommand: pnpm exec wrangler deploy --dry-run --config wrangler.jsonc --env prod
+    deployCommand: pnpm exec wrangler deploy --config wrangler.jsonc --env prod
+
+    # The keys secrets-live pushes as Worker secrets after each deploy — the
+    # ones the environment has stored, named only in the log, never a value.
+    runtimeSecrets: AGENT_ACCESS_KEY,HF_TOKEN,HF_MODELS
+
+    preDeployCommand: "echo 'No pre-deploy step configured.'"
+    migrationCommand: "echo 'No migrations configured.'"
+    # Smoke: /health answers `"status":"ok"` for THIS environment — the
+    # environment comes from the `env.<name>` vars the deploy used, so a stale
+    # or wrong Worker fails it — and then the owner's door: POST /api/chat
+    # with no key must be REFUSED, a 401 once an access key is stored or a
+    # 503 before (never a 500, never a 200 — a door that answers without the
+    # key would spend the owner's models on anyone). Not the agent's name,
+    # which is the owner's to change. The Worker composition exports no
+    # deployed URL, so the command names its own workers.dev URL;
+    # ${DEPLOYED_URL} overrides it (a custom domain, or a local `wrangler
+    # dev`). ${ORUN_ENVIRONMENT} the runner sets for every step. Each body is
+    # buffered before grep so an early match cannot SIGPIPE curl.
+    smokeCommand: 'base="${DEPLOYED_URL:-https://personal-ai-agent-api-${ORUN_ENVIRONMENT}.vijayakrishnan12994.workers.dev}" && health="$(curl -sf --max-time 20 "${base}/health")" && echo "${health}" | grep -q "\"status\":\"ok\"" && echo "${health}" | grep -q "\"environment\":\"${ORUN_ENVIRONMENT}\"" && code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST "${base}/api/chat" -H "content-type: application/json" -d "{\"messages\":[{\"role\":\"user\",\"content\":\"orun-smoke\"}]}")" && case "${code}" in 401|503) ;; *) echo "POST /api/chat without a key answered ${code}, not 401 or 503" >&2; false ;; esac'
+  labels:
+    team: platform
+    layer: runtime
+    surface: api
+    runtime: cloudflare
+# orun: redeploy 01-product as_5d73f683b0c44089a80e

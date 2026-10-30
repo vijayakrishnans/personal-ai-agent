@@ -1,0 +1,150 @@
+apiVersion: sourceplane.io/v1
+kind: Intent
+
+metadata:
+  name: personal-ai-agent
+  description: A personal AI agent on one Cloudflare Worker — a chat page and /api/chat answered with Workers AI or the owner's Hugging Face models and Spaces, its memory in a Durable Object, and a JSON health check, deployed to stage and prod
+  namespace: sourceplane
+
+execution:
+  state:
+    backendUrl: https://api-edge-prod.oruncloud.workers.dev
+    # Declared, enforced tenancy: the workspace claim is sent on every remote op
+    # (including the credential-free CI OIDC exchange) so the platform can
+    # enforce claim ⊆ authorized. Declaring it implies strict mode — a
+    # non-interactive run that resolves no workspace fails fast.
+    #
+    # `ws_CHANGE_ME` is the one value `ci.yml` treats as "not linked yet" and
+    # plans nothing for. A bootstrap writes the product's workspace here; by
+    # hand, set it to yours (`orun cloud link`) and the Orun pipeline runs.
+    workspace: org_b4c022cbde054db3bb0e011a7befb2f5
+    requireOrg: true
+    # Push the resolved catalog after a successful plan on the default branch,
+    # keeping the workspace-global catalog head fresh without an explicit
+    # `--push-catalog`.
+    autopushCatalog: true
+  # Lanes (orun ≥ v2.76.0): CI runs one GitHub job per LANE, not per orun job.
+  lanes:
+    mode: auto
+    maxLanes: 6
+    concurrency: 6
+
+compositions:
+  sources:
+    # The composition stack lives in sourceplane/stack-tectonic and is consumed
+    # as a published OCI artifact rather than a repo-local directory. Pin an
+    # explicit version: a bare repository reference resolves to `:latest`,
+    # which would let a catalog release change this repo's execution contracts
+    # without a commit here. Bumping the tag is the deliberate upgrade step.
+    #
+    # 0.19.0, NOT 0.20.0 (cirrus-baseline's pin). 0.20.0 makes the workspace
+    # install lane-scoped: it runs once in the source checkout and every job's
+    # staged tree LINKS its top-level node_modules there — out of the tree.
+    # Next 16's Turbopack refuses a dependency that resolves outside its root
+    # ("Symlink … points out of the filesystem root"), so the Next.js products
+    # on these conventions pin 0.19.0, and this one keeps the same pin for one
+    # convention. This Worker builds with wrangler's esbuild, which follows the
+    # link, but under 0.19.0 each job installs inside its own tree, and the API
+    # has one job per lane, so the shared install would save nothing anyway.
+    # 0.19.0 also retries a first deploy that loses Cloudflare's 10007 race and
+    # retries the smoke while a new workers.dev route propagates. A bump is a
+    # deliberate pull request that re-runs the lane's steps in a job tree
+    # staged with the new layout.
+    - name: stack-tectonic
+      kind: oci
+      ref: oci://ghcr.io/sourceplane/stack-tectonic:0.19.0
+  resolution:
+    precedence:
+      - stack-tectonic
+    bindings:
+      terraform: stack-tectonic
+      cloudflare-domain: stack-tectonic
+      db-migrate: stack-tectonic
+
+discovery:
+  roots:
+    - apps/
+    - infra/
+    - packages/
+    - tests/
+
+automation:
+  triggerBindings:
+    github-pull-request:
+      description: Pull request validation
+      on:
+        provider: github
+        event: pull_request
+        actions:
+          - opened
+          - synchronize
+          - reopened
+          - ready_for_review
+        baseBranches:
+          - main
+      plan:
+        scope: changed
+        base: pull_request.base.sha
+        head: pull_request.head.sha
+
+    github-push-main:
+      description: Main branch stack convergence after merge
+      on:
+        provider: github
+        event: push
+        branches:
+          - main
+
+    local-development:
+      description: Local testing with full Terraform execution
+      on:
+        provider: local
+
+environments:
+  dev:
+    description: Verify-only. Pull requests plan and verify here; nothing is deployed.
+    activation:
+      triggerRefs:
+        - github-pull-request
+        # @dev-lanes-deferred:ICAgICAgICAtIGdpdGh1Yi1wdXNoLW1haW4= (tooling/bootstrap/dev-lanes.mjs --restore puts it back)
+        - local-development
+    dependencyMode: advisory
+    policies:
+      requireApproval: "false"
+    env:
+      BASE_DOMAIN: personal-ai-agent.example.com
+
+  stage:
+    description: Deployed on every merge to main, before prod.
+    url: https://personal-ai-agent-api-stage.vijayakrishnan12994.workers.dev
+    activation:
+      triggerRefs:
+        - github-pull-request
+        - github-push-main
+    policies:
+      requireApproval: "false"
+    env:
+      BASE_DOMAIN: personal-ai-agent.example.com
+
+  prod:
+    description: Where visitors are. Deploys after stage converges on the same commit.
+    url: https://personal-ai-agent-api-prod.vijayakrishnan12994.workers.dev
+    activation:
+      triggerRefs:
+        - github-pull-request
+        - github-push-main
+    # @promotion-deferred:ICAgIHByb21vdGlvbjoKICAgICAgZGVwZW5kc09uOgogICAgICAgIC0gZW52aXJvbm1lbnQ6IHN0YWdl (tooling/bootstrap/promotion.mjs --restore puts it back)
+    policies:
+      requireApproval: "false"
+    env:
+      BASE_DOMAIN: personal-ai-agent.example.com
+
+# Repo-level catalog entity: front page + role-tagged docs (rendered in the
+# workspace Docs library, pinned to the commit by `orun plan`).
+repo:
+  displayName: personal-ai-agent
+  docs:
+    overview: README.md
+    pages:
+      - { path: ai/context/operations.md, role: runbook, title: Operating contract }
+      - { path: ai/context/deployment.md, role: reference, title: Live deployment manifest }

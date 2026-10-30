@@ -1,0 +1,62 @@
+// Committed as-is (no wiring template): the Worker's two bindings are the
+// account's Workers AI, which has no resource id to wire, and the agent's own
+// Durable Object, which wrangler creates from the migration below on the
+// first deploy. Orun deploys with `--env stage` / `--env prod`; wrangler names
+// the Worker personal-ai-agent-api-<env> from the top-level name. Each
+// environment's ENVIRONMENT var is what GET /health reports. A binding is not
+// inherited by a named environment, so `ai` and `durable_objects` are
+// declared in each.
+//
+// The agent's keys (its access key, and Hugging Face's token and models) are
+// Worker SECRETS, never vars: the deploy pushes the ones the environment has
+// stored (component.yaml → runtimeSecrets), and `wrangler secret put` sets one
+// by hand.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "personal-ai-agent-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "ai": { "binding": "AI" },
+  "durable_objects": {
+    "bindings": [{ "name": "MEMORY", "class_name": "AgentMemory" }]
+  },
+  // SQLite-backed, which Workers Free allows. One migration, never edited:
+  // a later class change is a new tag after this one.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AgentMemory"] }],
+  "vars": {
+    "ENVIRONMENT": "local"
+  },
+  "env": {
+    "dev": {
+      "ai": { "binding": "AI" },
+      "durable_objects": {
+        "bindings": [{ "name": "MEMORY", "class_name": "AgentMemory" }]
+      },
+      "vars": {
+        "ENVIRONMENT": "dev"
+      }
+    },
+    "stage": {
+      "ai": { "binding": "AI" },
+      "durable_objects": {
+        "bindings": [{ "name": "MEMORY", "class_name": "AgentMemory" }]
+      },
+      "vars": {
+        "ENVIRONMENT": "stage"
+      }
+    },
+    "prod": {
+      "ai": { "binding": "AI" },
+      "durable_objects": {
+        "bindings": [{ "name": "MEMORY", "class_name": "AgentMemory" }]
+      },
+      "vars": {
+        "ENVIRONMENT": "prod"
+      }
+    }
+  }
+}
