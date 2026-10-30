@@ -130,6 +130,7 @@ and a sleeping Space wakes on the first call, which can take a while.
 | `places` | restaurants, hotels, sights, pharmacies and more near a place |
 | `useSkill` | loads a skill's instructions when a request matches it |
 | `generateImage` | draws a picture and shows it in the chat |
+| `composeMusic` | makes a piece of music (instrumental, or a song from lyrics) and plays it in the chat |
 
 Every model, tools or not, is told the 30 most recent facts in its system
 prompt. Only a model that calls tools can save new ones. Spaces see your
@@ -171,6 +172,18 @@ carry on with it, or **✕** to delete it. **New chat** starts a fresh one;
   the default) or FLUX.2 [klein] 4B, [klein] 9B or [dev] (best quality,
   slowest). It shows in the chat and goes into your library. A model only
   ever learns an image's number, never its contents.
+
+- **Music.** Ask for "a calm lo-fi track for studying" or give it lyrics
+  for a song. It's made on a free Hugging Face Space, with no key and nothing
+  to pay. **ACE-Step** (the default) takes a minute or less and makes
+  instrumentals or songs from lyrics; **YuE2 3B** makes full songs with
+  vocals, more slowly. Choose in Settings (☰) → **Models**. The track plays in
+  the chat, with a download link, and goes into your library (the newest 40).
+  Free Spaces have a waiting line and a daily GPU allowance: store `HF_TOKEN`
+  and the agent uses your own free allowance rather than the one shared by
+  every anonymous caller. A Space is run by its owner and can change or go
+  away; the other model is then a click away. Check a model's terms before
+  using a track commercially.
 
 ## Skills
 
@@ -235,7 +248,7 @@ whole (the newest 500).
 
 **+ Tools** beside the input asks the agent to use one tool for your next
 message: Web search, Research papers, News, Wikipedia, Weather, Map, Plan a
-trip, Draw an image or Calculate. It shows as a chip above the input
+trip, Draw an image, Make music or Calculate. It shows as a chip above the input
 (**✕** drops it). The agent is told which you chose; it still decides how.
 
 Maps come from **OpenStreetMap**, with no key. `showMap` finds places by name
@@ -347,10 +360,11 @@ Two ways to stop the agent, both reversible:
 | `GET /api/notes`, `POST /api/notes` (`{text, list?, keepDays?: 2\|7\|null}`), `PATCH /api/notes/<id>` (`{done?, text?, list?, keepDays?}`), `DELETE /api/notes/<id>` | your notes and to-dos; each expires `keepDays` from now (2 by default), `null` for good |
 | `GET /api/images/<id>` | an image the agent drew (JPEG or PNG) |
 | `GET /api/images`, `DELETE /api/images/<id>` | the library's images |
+| `GET /api/music`, `GET /api/music/<id>` (the audio), `DELETE /api/music/<id>` | the music it made |
 | `GET /api/saved`, `POST /api/saved` (`{text, source?}`), `DELETE /api/saved/<id>` | saved answers |
 | `GET /api/skills`, `PUT /api/skills/<name>` (`{description, instructions}`), `DELETE /api/skills/<name>` | the skills, built in and your own |
 | `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
-| `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?}`) | the pause, and which model draws images |
+| `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?, musicModel?}`) | the pause, and which models draw images and make music |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?, question?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
 | `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |

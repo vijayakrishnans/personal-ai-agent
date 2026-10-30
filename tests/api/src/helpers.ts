@@ -159,6 +159,35 @@ export async function hfStandIn() {
       const choice = answer(b.messages, (b.tools ?? []).map((t) => t.function.name), b.model, asked);
       return json(200, { id: "chatcmpl-1", object: "chat.completion", created: 1, model: b.model, choices: [{ index: 0, ...choice }], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } });
     }
+    // Music Spaces: their API's description, a job, its stream, and the file.
+    const music = /^\/spaces\/(ACE-Step\/ACE-Step|mrfakename\/yue2-3b)\/gradio_api\/(info|call\/(__call__|generate_song)(?:\/(\w+))?|file=(.+))$/.exec(path);
+    if (music) {
+      const [, space, what, endpoint, eventId, file] = music;
+      if (what === "info")
+        return json(200, {
+          named_endpoints:
+            space === "ACE-Step/ACE-Step"
+              ? { "/__call__": { parameters: [{ parameter_name: "audio_duration", parameter_default: -1 }, { parameter_name: "prompt", parameter_default: "funk" }, { parameter_name: "lyrics", parameter_default: "[verse]" }, { parameter_name: "infer_step", parameter_default: 60 }, { parameter_name: "guidance_scale", parameter_default: 15 }, { parameter_name: "manual_seeds" }] } }
+              : { "/generate_song": { parameters: [{ parameter_name: "style", parameter_default: "pop" }, { parameter_name: "lyrics" }, { parameter_name: "seed", parameter_default: 42 }] } },
+        });
+      if (file) {
+        res.writeHead(200, { "content-type": "audio/mpeg" });
+        return res.end(Buffer.from("ID3-fake-mp3-bytes"));
+      }
+      if (!eventId) {
+        const data = (parsed as { data: unknown[] }).data;
+        const id = `mu${jobs.size + 1}`;
+        jobs.set(id, JSON.stringify({ space, endpoint, data }));
+        return json(200, { event_id: id });
+      }
+      const job = JSON.parse(jobs.get(eventId) ?? "{}") as { space: string; data: unknown[] };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const style = String(job.data[job.space === "ACE-Step/ACE-Step" ? 1 : 0]);
+      if (style.includes("explode")) return res.end("event: heartbeat\ndata: null\n\nevent: error\ndata: \"GPU quota exceeded\"\n\n");
+      const base = `http://${req.headers.host}/spaces/${job.space}`;
+      const url = style.includes("elsewhere") ? "https://evil.example/x.mp3" : `${base}/gradio_api/file=/tmp/gradio/out.mp3`;
+      return res.end(`event: heartbeat\ndata: null\n\nevent: complete\ndata: ${JSON.stringify([{ path: "/tmp/gradio/out.mp3", url, orig_name: "out.mp3", meta: { _type: "gradio.FileData" } }, { done: true }])}\n\n`);
+    }
     const start = /^\/spaces\/([^/]+\/[^/]+)\/gradio_api\/call\/([\w-]+)$/.exec(path);
     if (start && req.method === "POST") {
       const [, space, endpoint] = start;

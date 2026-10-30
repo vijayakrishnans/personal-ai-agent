@@ -4,7 +4,7 @@ import { MAX_SKILLS, type Skill } from './skills'
 // THE AGENT'S MEMORY: one SQLite-backed Durable Object per environment, named
 // `owner` (memoryOf below). It keeps what outlives a chat — the facts the
 // agent was asked to remember, its owner's notes and to-dos, its owner's
-// library (the images it drew, the answers they saved), the models its owner
+// library (the images it drew, the music it made, the answers they saved), the models its owner
 // added in the page, the skills its owner wrote, its settings (paused? which
 // image model?), a log of the tools it called, and the owner's conversations
 // — each saved with every secret already taken out, so the sidebar can list
@@ -41,6 +41,10 @@ export type Conversation = ConversationSummary & { messages: ConversationMessage
 // Its bytes are fetched on their own (getImage), never handed to a model.
 export type Image = { id: number; prompt: string; model: string; createdAt: string }
 
+// A track the agent made: the style asked for, its lyrics, with which model,
+// how long, and when. Its audio is fetched on its own (getTrack).
+export type TrackInfo = { id: number; style: string; lyrics: string; model: string; type: string; seconds: number; createdAt: string }
+
 // An answer (or anything else) the owner saved to their library: kept whole,
 // never put in a prompt.
 export type Saved = { id: number; text: string; source: string; createdAt: string }
@@ -76,6 +80,10 @@ export interface MemoryStore {
   getImage(id: number): Promise<(Image & { base64: string }) | null>
   listImages(): Promise<Image[]>
   deleteImage(id: number): Promise<boolean>
+  saveTrack(track: Omit<TrackInfo, 'id' | 'createdAt'>, base64: string): Promise<TrackInfo>
+  getTrack(id: number): Promise<(TrackInfo & { base64: string }) | null>
+  listTracks(): Promise<TrackInfo[]>
+  deleteTrack(id: number): Promise<boolean>
   saveItem(text: string, source: string): Promise<Saved>
   listSaved(): Promise<Saved[]>
   deleteSaved(id: number): Promise<boolean>
@@ -90,7 +98,7 @@ export interface MemoryStore {
   setSetting(key: SettingKey, value: string): Promise<void>
 }
 
-export type SettingKey = 'imageModel'
+export type SettingKey = 'imageModel' | 'musicModel'
 
 // A fact or a model the owner can see in full on one screen.
 export const MAX_MEMORY_CHARS = 500
@@ -108,6 +116,9 @@ export const MAX_NOTE_CHARS = 20_000
 export const MAX_NOTES = 500
 export const MAX_IMAGES = 200
 export const MAX_SAVED = 500
+// A track's audio is kept in parts, each well under a row's 2 MB.
+export const MAX_TRACKS = 40
+export const TRACK_PART_CHARS = 1_500_000
 export const MAX_SAVED_CHARS = 20_000
 export const DEFAULT_LIST = 'Notes'
 
@@ -196,6 +207,21 @@ export class AgentMemory extends DurableObject implements MemoryStore {
           description TEXT NOT NULL,
           instructions TEXT NOT NULL,
           updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS tracks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          style TEXT NOT NULL,
+          lyrics TEXT NOT NULL,
+          model TEXT NOT NULL,
+          type TEXT NOT NULL,
+          seconds INTEGER NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS track_parts (
+          track_id INTEGER NOT NULL,
+          n INTEGER NOT NULL,
+          data TEXT NOT NULL,
+          PRIMARY KEY (track_id, n)
         );
         CREATE TABLE IF NOT EXISTS conversations (
           id TEXT PRIMARY KEY,
@@ -450,6 +476,45 @@ export class AgentMemory extends DurableObject implements MemoryStore {
 
   async deleteImage(id: number): Promise<boolean> {
     return this.ctx.storage.sql.exec('DELETE FROM images WHERE id = ?', id).rowsWritten > 0
+  }
+
+  // MUSIC: the newest MAX_TRACKS, each track's audio (base64) in parts.
+  async saveTrack(track: Omit<TrackInfo, 'id' | 'createdAt'>, base64: string): Promise<TrackInfo> {
+    const sql = this.ctx.storage.sql
+    const createdAt = new Date().toISOString()
+    const { id } = sql
+      .exec<{ id: number }>('INSERT INTO tracks (style, lyrics, model, type, seconds, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id', track.style, track.lyrics, track.model, track.type, track.seconds, createdAt)
+      .one()
+    for (let n = 0; n * TRACK_PART_CHARS < base64.length; n++) {
+      sql.exec('INSERT INTO track_parts (track_id, n, data) VALUES (?, ?, ?)', id, n, base64.slice(n * TRACK_PART_CHARS, (n + 1) * TRACK_PART_CHARS))
+    }
+    sql.exec('DELETE FROM tracks WHERE id NOT IN (SELECT id FROM tracks ORDER BY id DESC LIMIT ?)', MAX_TRACKS)
+    sql.exec('DELETE FROM track_parts WHERE track_id NOT IN (SELECT id FROM tracks)')
+    return { id, ...track, createdAt }
+  }
+
+  async getTrack(id: number): Promise<(TrackInfo & { base64: string }) | null> {
+    const info = this.tracks('SELECT id, style, lyrics, model, type, seconds, created_at FROM tracks WHERE id = ?', id)[0]
+    if (!info) return null
+    const parts = this.ctx.storage.sql.exec<{ data: string }>('SELECT data FROM track_parts WHERE track_id = ? ORDER BY n', id).toArray()
+    return { ...info, base64: parts.map((p) => p.data).join('') }
+  }
+
+  async listTracks(): Promise<TrackInfo[]> {
+    return this.tracks('SELECT id, style, lyrics, model, type, seconds, created_at FROM tracks ORDER BY id DESC')
+  }
+
+  async deleteTrack(id: number): Promise<boolean> {
+    const sql = this.ctx.storage.sql
+    sql.exec('DELETE FROM track_parts WHERE track_id = ?', id)
+    return sql.exec('DELETE FROM tracks WHERE id = ?', id).rowsWritten > 0
+  }
+
+  private tracks(query: string, ...args: number[]): TrackInfo[] {
+    return this.ctx.storage.sql
+      .exec<{ id: number; style: string; lyrics: string; model: string; type: string; seconds: number; created_at: string }>(query, ...args)
+      .toArray()
+      .map((r) => ({ id: r.id, style: r.style, lyrics: r.lyrics, model: r.model, type: r.type, seconds: r.seconds, createdAt: r.created_at }))
   }
 
   async saveItem(text: string, source: string): Promise<Saved> {

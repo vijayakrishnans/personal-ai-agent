@@ -21,6 +21,7 @@ import {
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, imageModel, imageType } from './images'
+import { DEFAULT_MUSIC_MODEL, MUSIC_MODELS, musicModel } from './music'
 import { hasSecret, redact } from './secrets'
 import { BUILT_IN_SKILLS, MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, SKILL_NAME, skillsOnOffer } from './skills'
 import { page } from './ui'
@@ -78,6 +79,7 @@ app.get('/api/models', async (c) => {
     huggingface: huggingfaceConnected(c.env),
     models: await models(c),
     images: { models: IMAGE_MODELS, default: DEFAULT_IMAGE_MODEL },
+    music: { models: MUSIC_MODELS.map(({ id, label }) => ({ id, label })), default: DEFAULT_MUSIC_MODEL },
   })
 })
 
@@ -242,6 +244,7 @@ const SavedMessage = z.object({
   meta: z.string().max(400).optional(),
   error: z.boolean().optional(),
   images: z.array(z.object({ id: z.number().int().positive(), prompt: z.string().max(2000) })).max(8).optional(),
+  tracks: z.array(z.object({ id: z.number().int().positive(), style: z.string().max(1000), seconds: z.number().optional() })).max(4).optional(),
   maps: z.array(z.record(z.string(), z.unknown())).max(4).optional(),
 })
 const SaveConversation = z.object({ title: z.string().max(MAX_TITLE_CHARS).optional(), messages: z.array(SavedMessage).min(1).max(400) })
@@ -288,6 +291,22 @@ app.get('/api/images/:id', async (c) => {
 app.delete('/api/images/:id', async (c) => {
   const id = noteId(c.req.param('id'))
   return id && (await c.var.memory.deleteImage(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+
+// MUSIC the agent made: listed, played (the audio itself), deleted.
+app.get('/api/music', async (c) => c.json({ ok: true, tracks: await c.var.memory.listTracks() }))
+
+app.get('/api/music/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  const track = id ? await c.var.memory.getTrack(id) : null
+  if (!track) return c.json({ ok: false, error: 'not_found' }, 404)
+  const bytes = Uint8Array.from(atob(track.base64), (ch) => ch.charCodeAt(0))
+  return c.body(bytes, 200, { 'content-type': track.type, 'cache-control': 'private, max-age=31536000, immutable' })
+})
+
+app.delete('/api/music/:id', async (c) => {
+  const id = noteId(c.req.param('id'))
+  return id && (await c.var.memory.deleteTrack(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
 })
 
 app.get('/api/saved', async (c) => c.json({ ok: true, saved: await c.var.memory.listSaved() }))
@@ -353,20 +372,29 @@ const state = async (memory: MemoryStore) => ({
   ok: true,
   paused: await memory.isPaused(),
   imageModel: imageModel(await memory.getSetting('imageModel')).id,
+  musicModel: musicModel(await memory.getSetting('musicModel')).id,
 })
 
 app.get('/api/state', async (c) => c.json(await state(c.var.memory)))
 
 app.put('/api/state', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { paused?: unknown; imageModel?: unknown } | null
+  const body = (await c.req.json().catch(() => null)) as { paused?: unknown; imageModel?: unknown; musicModel?: unknown } | null
   const paused = body?.paused
   const image = body?.imageModel
+  const music = body?.musicModel
   const validImage = typeof image === 'string' && IMAGE_MODELS.some((m) => m.id === image)
-  if ((paused !== undefined && typeof paused !== 'boolean') || (image !== undefined && !validImage) || (paused === undefined && image === undefined)) {
-    return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true|false} and/or {"imageModel": one of the image models}' }, 400)
+  const validMusic = typeof music === 'string' && MUSIC_MODELS.some((m) => m.id === music)
+  if (
+    (paused !== undefined && typeof paused !== 'boolean') ||
+    (image !== undefined && !validImage) ||
+    (music !== undefined && !validMusic) ||
+    (paused === undefined && image === undefined && music === undefined)
+  ) {
+    return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true|false}, {"imageModel": one of the image models} and/or {"musicModel": one of the music models}' }, 400)
   }
   if (typeof paused === 'boolean') await c.var.memory.setPaused(paused)
   if (validImage) await c.var.memory.setSetting('imageModel', image)
+  if (validMusic) await c.var.memory.setSetting('musicModel', music)
   return c.json(await state(c.var.memory))
 })
 
@@ -421,7 +449,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: toolNames(env),
-    endpoints: { chat: '/api/chat', conversations: '/api/conversations', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', saved: '/api/saved', skills: '/api/skills', state: '/api/state', activity: '/api/activity', health: '/health' },
+    endpoints: { chat: '/api/chat', conversations: '/api/conversations', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', music: '/api/music', saved: '/api/saved', skills: '/api/skills', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 
