@@ -66,7 +66,8 @@ repos** if you want to reach your private Spaces.
 
 There are two ways to give the agent the token:
 
-- **In the page:** Settings (⚙) → **Models** → **Hugging Face token**. It
+- **In the page:** Settings (⚙) → **Models** → **Hugging Face token**
+  (`PUT /api/keys/hf`; the OpenAlex key is `/api/keys/openalex`). It
   works at once, with no redeploy. The agent stores it encrypted (AES-GCM,
   under a key derived from `AGENT_ACCESS_KEY`), never sends it back to the
   page, and sends it only to Hugging Face. **Remove token** deletes it. If
@@ -230,10 +231,18 @@ abstracts. `paper` looks a work up by DOI, and says plainly when there is no
 such work, which is how `citation-check` catches invented references. The
 agent cites only works a tool returned.
 
-OpenAlex needs no key, but keyless calls share a small daily budget per IP
-address, and on Workers that's shared with everyone else. For the agent's own
-budget, get a free key at [openalex.org/settings/api](https://openalex.org/settings/api)
-and store it, then redeploy:
+OpenAlex needs no key, but keyless calls share a small daily budget ($0.10,
+about 100 searches) per IP address. On Workers that budget is shared with
+everyone else, so it is often spent early in the day and paper searches fail.
+A free key at [openalex.org/settings/api](https://openalex.org/settings/api)
+gives the agent its own budget ($1 a day, about 1,000 searches). There are two
+ways to give the agent the key:
+
+- **In the page:** Settings (⚙) → **Models** → **OpenAlex key**. It works at
+  once, with no redeploy. It is kept encrypted and handled exactly like the
+  Hugging Face token (see "Add Hugging Face models").
+- **As an Orun secret**, which wins over a key pasted in the page. Store it,
+  then redeploy:
 
 ```bash
 orun secrets set OPENALEX_API_KEY --org <ws> --env prod
