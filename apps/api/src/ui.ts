@@ -715,37 +715,45 @@ const SCRIPT = String.raw`
     })) : [li('None yet — add one above, or list them in HF_MODELS.')]));
     renderImageModels();
     $('add-note').textContent = body.huggingface ? '' : 'Inference Providers models need a Hugging Face token (above). Public Spaces work without one.';
-    showHfToken(body.hfToken || null);
+    const keys = body.keys || { hf: body.hfToken || null };
+    for (const box of KEY_BOXES) showKey(box, keys[box.name] || null);
   }
 
-  // THE HUGGING FACE TOKEN: pasted here, kept sealed by the agent, never
-  // shown again. One stored as the HF_TOKEN secret wins and is left alone.
-  function showHfToken(source) {
+  // KEYS pasted here — the Hugging Face token and the OpenAlex key: kept
+  // sealed by the agent, never shown again. One stored as its secret in
+  // Orunbase wins and is left alone.
+  const KEY_BOXES = [
+    { name: 'hf', id: 'hf', what: 'token', title: 'Hugging Face', secret: 'HF_TOKEN', none: 'No token yet. Paste one to use Hugging Face models.', saved: 'Saved. Hugging Face models work now, with no redeploy.' },
+    { name: 'openalex', id: 'oa', what: 'key', title: 'OpenAlex', secret: 'OPENALEX_API_KEY', none: 'No key yet: papers share OpenAlex’s small free budget with every app on the same network, and often find it spent. Paste a free key to get your own.', saved: 'Saved. Paper searches use your own OpenAlex budget now, with no redeploy.' },
+  ];
+  function showKey(box, source) {
     const status = {
-      secret: 'Stored as this environment’s HF_TOKEN secret in Orunbase. That one is used; change it there.',
+      secret: 'Stored as this environment’s ' + box.secret + ' secret in Orunbase. That one is used; change it there.',
       app: 'Saved here, encrypted. Paste a new one to replace it.',
-      unreadable: 'A token was saved, but the access key has changed since, so it can no longer be read. Paste it again.',
-    }[source] || 'No token yet. Paste one to use Hugging Face models.';
-    $('hf-status').textContent = status;
-    $('hf-entry').hidden = source === 'secret';
-    $('hf-remove').hidden = source !== 'app' && source !== 'unreadable';
-    $('hf-save').textContent = source === 'app' ? 'Replace token' : 'Save token';
+      unreadable: 'A ' + box.what + ' was saved, but the access key has changed since, so it can no longer be read. Paste it again.',
+    }[source] || box.none;
+    $(box.id + '-status').textContent = status;
+    $(box.id + '-entry').hidden = source === 'secret';
+    $(box.id + '-remove').hidden = source !== 'app' && source !== 'unreadable';
+    $(box.id + '-save').textContent = (source === 'app' ? 'Replace ' : 'Save ') + box.what;
   }
-  $('hf-form').onsubmit = async (e) => {
-    e.preventDefault();
-    const token = $('hf-token').value.trim();
-    if (!token) return;
-    try {
-      await api('/api/hf-token', { method: 'PUT', body: JSON.stringify({ token }) });
-      $('hf-token').value = ''; $('hf-note').textContent = 'Saved. Hugging Face models work now, with no redeploy.';
-      await loadModels();
-    } catch (err) { $('hf-note').textContent = err.message; }
-  };
-  $('hf-remove').onclick = async () => {
-    if (!confirm('Remove the Hugging Face token from this agent?')) return;
-    try { await api('/api/hf-token', { method: 'DELETE' }); $('hf-note').textContent = 'Removed.'; await loadModels(); }
-    catch (err) { $('hf-note').textContent = err.message; }
-  };
+  for (const box of KEY_BOXES) {
+    $(box.id + '-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const value = $(box.id + '-key').value.trim();
+      if (!value) return;
+      try {
+        await api('/api/keys/' + box.name, { method: 'PUT', body: JSON.stringify({ key: value }) });
+        $(box.id + '-key').value = ''; $(box.id + '-note').textContent = box.saved;
+        await loadModels();
+      } catch (err) { $(box.id + '-note').textContent = err.message; }
+    };
+    $(box.id + '-remove').onclick = async () => {
+      if (!confirm('Remove the ' + box.title + ' ' + box.what + ' from this agent?')) return;
+      try { await api('/api/keys/' + box.name, { method: 'DELETE' }); $(box.id + '-note').textContent = 'Removed.'; await loadModels(); }
+      catch (err) { $(box.id + '-note').textContent = err.message; }
+    };
+  }
 
   async function loadMemories() {
     memories = (await api('/api/memories')).memories;
@@ -1498,12 +1506,25 @@ input,select,textarea{font-size:16px}
           <form class="stack" id="hf-form">
             <p class="hint" id="hf-status"></p>
             <div class="row" id="hf-entry">
-              <input id="hf-token" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false" aria-label="Hugging Face token" style="flex:1">
+              <input id="hf-key" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false" aria-label="Hugging Face token" style="flex:1">
               <button id="hf-save">Save token</button>
             </div>
             <div class="row"><button type="button" id="hf-remove" hidden>Remove token</button></div>
             <p class="hint">Create one at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co → Access Tokens</a>: <strong>Fine-grained</strong>, with <strong>Make calls to Inference Providers</strong>. It is kept encrypted with this agent, is never shown again, and is sent only to Hugging Face. It lets you use Inference Providers models, and music on your own free GPU allowance.</p>
             <p class="hint" id="hf-note" role="status"></p>
+          </form>
+        </section>
+        <section>
+          <h2>OpenAlex key (research papers)</h2>
+          <form class="stack" id="oa-form">
+            <p class="hint" id="oa-status"></p>
+            <div class="row" id="oa-entry">
+              <input id="oa-key" type="password" placeholder="Your OpenAlex API key" autocomplete="off" spellcheck="false" aria-label="OpenAlex API key" style="flex:1">
+              <button id="oa-save">Save key</button>
+            </div>
+            <div class="row"><button type="button" id="oa-remove" hidden>Remove key</button></div>
+            <p class="hint">Get a free one at <a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org → Settings → API</a>: it gives the agent its own daily budget (about 1,000 paper searches) instead of one shared with everyone on its network. It is kept encrypted with this agent, is never shown again, and is sent only to OpenAlex.</p>
+            <p class="hint" id="oa-note" role="status"></p>
           </form>
         </section>
         <section>

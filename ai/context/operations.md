@@ -135,7 +135,9 @@ Caveats that matter:
   - `HF_TOKEN` — a Hugging Face fine-grained token with "Make calls to
     Inference Providers" (and read access for private Spaces); Inference
     Providers models answer `409` without it, public Spaces do not need it.
-    The owner may instead paste it in the page (`PUT /api/hf-token`): it is
+    The owner may instead paste it in the page (`PUT /api/keys/hf`, first
+    spelled `/api/hf-token`; `OPENALEX_API_KEY` likewise at
+    `/api/keys/openalex`): each is
     kept in MEMORY sealed under a key derived from `AGENT_ACCESS_KEY`
     (`vault.ts`), never returned, and the secret wins when both exist;
   - `HF_MODELS` — the Hugging Face models and Spaces to offer from the start,

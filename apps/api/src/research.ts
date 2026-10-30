@@ -54,7 +54,7 @@ async function openalex<T>(env: Env, path: string, params: Record<string, string
   if (env.OPENALEX_API_KEY) q.set('api_key', env.OPENALEX_API_KEY)
   const res = await fetch(`${base(env)}${path}?${q}`, { headers: { accept: 'application/json', 'user-agent': 'personal-agent/1.0 (+https://orunbase.com)' }, signal: AbortSignal.timeout(TIMEOUT_MS) })
   if (res.status === 404) throw new NotFound()
-  if (res.status === 429) throw new Error('OpenAlex is busy or its free daily budget is spent; OPENALEX_API_KEY gives the agent its own')
+  if (res.status === 429) throw new Error('OpenAlex is busy or its shared free daily budget is spent; a free OpenAlex key, pasted in Settings → Models, gives the agent its own')
   if (!res.ok) throw new Error(`OpenAlex answered ${res.status}`)
   return (await res.json()) as T
 }

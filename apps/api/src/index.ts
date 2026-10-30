@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { chosenModes, runAgent, ChatRequest, toolNames } from './agent'
 import { bearer, keyMatches } from './auth'
 import { accessConfigured, huggingfaceConnected, killSwitchOn, type Env } from './env'
-import { forgetHfToken, HF_TOKEN_PATTERN, hfToken, storeHfToken, type HfTokenSource } from './vault'
+import { forgetKey, isKeyName, KEYS, storeKey, withPastedKeys, type KeyName, type KeySource } from './vault'
 import { API_NAME } from './identity'
 import {
   memoryOf,
@@ -30,7 +30,7 @@ import { webSearchConnected } from './web'
 
 export { AgentMemory } from './memory'
 
-type Vars = { memory: MemoryStore; hfSource: HfTokenSource }
+type Vars = { memory: MemoryStore; keySources: Record<KeyName, KeySource> }
 type AppContext = Context<{ Bindings: Env; Variables: Vars }>
 const app = new Hono<{ Bindings: Env; Variables: Vars }>()
 
@@ -69,10 +69,10 @@ app.use('/api/*', async (c, next) => {
     return c.json({ ok: false, error: 'unauthorized', message: 'Send the agent’s access key as a bearer token.' }, 401)
   }
   c.set('memory', memoryOf(c.env.MEMORY))
-  // A token pasted in the page stands in for HF_TOKEN, for this request only.
-  const hf = await hfToken(c.env, c.var.memory)
-  c.set('hfSource', hf.source)
-  if (hf.source === 'app') c.env = { ...c.env, HF_TOKEN: hf.token }
+  // Keys pasted in the page stand in for their secrets, for this request only.
+  const keys = await withPastedKeys(c.env, c.var.memory)
+  c.set('keySources', keys.sources)
+  c.env = keys.env
   return next()
 })
 
@@ -82,30 +82,36 @@ app.get('/api/models', async (c) => {
   return c.json({
     default: modelKey('workers-ai', DEFAULT_MODEL),
     huggingface: huggingfaceConnected(c.env),
-    hfToken: c.var.hfSource,
+    hfToken: c.var.keySources.hf,
+    keys: c.var.keySources,
     models: await models(c),
     images: { models: IMAGE_MODELS, default: DEFAULT_IMAGE_MODEL },
     music: { models: MUSIC_MODELS.map(({ id, label }) => ({ id, label })), default: DEFAULT_MUSIC_MODEL },
   })
 })
 
-// THE HUGGING FACE TOKEN pasted in the page (vault.ts): stored sealed,
-// never sent back. HF_TOKEN stored as a secret wins, so then there is
-// nothing to set here.
-app.put('/api/hf-token', async (c) => {
-  if (c.var.hfSource === 'secret') return c.json({ ok: false, error: 'hf_token_is_a_secret', message: 'HF_TOKEN is stored as this environment’s secret, which wins; change it there.' }, 409)
+// KEYS pasted in the page (vault.ts) — the Hugging Face token and the
+// OpenAlex key: stored sealed, never sent back. A key stored as a secret
+// wins, so then there is nothing to set here. /api/hf-token is the first
+// spelling of /api/keys/hf.
+async function putKey(c: AppContext, name: KeyName) {
+  if (c.var.keySources[name] === 'secret') return c.json({ ok: false, error: 'key_is_a_secret', message: `${KEYS[name].secret} is stored as this environment’s secret, which wins; change it there.` }, 409)
   const body = await c.req.json().catch(() => null)
-  const token = typeof body?.token === 'string' ? body.token.trim() : ''
-  if (!HF_TOKEN_PATTERN.test(token)) return c.json({ ok: false, error: 'invalid_token', message: 'That is not a Hugging Face access token (hf_ followed by letters and digits).' }, 400)
-  await storeHfToken(c.env, c.var.memory, token)
-  return c.json({ ok: true, hfToken: 'app' })
-})
-
-app.delete('/api/hf-token', async (c) => {
-  if (c.var.hfSource === 'secret') return c.json({ ok: false, error: 'hf_token_is_a_secret', message: 'HF_TOKEN is stored as this environment’s secret; remove it there and redeploy.' }, 409)
-  await forgetHfToken(c.var.memory)
-  return c.json({ ok: true, hfToken: null })
-})
+  const value = typeof body?.token === 'string' ? body.token.trim() : typeof body?.key === 'string' ? body.key.trim() : ''
+  if (!KEYS[name].pattern.test(value)) return c.json({ ok: false, error: 'invalid_token', message: KEYS[name].invalid }, 400)
+  await storeKey(c.env, c.var.memory, name, value)
+  return c.json({ ok: true, key: name, source: 'app' })
+}
+async function deleteKey(c: AppContext, name: KeyName) {
+  if (c.var.keySources[name] === 'secret') return c.json({ ok: false, error: 'key_is_a_secret', message: `${KEYS[name].secret} is stored as this environment’s secret; remove it there and redeploy.` }, 409)
+  await forgetKey(c.var.memory, name)
+  return c.json({ ok: true, key: name, source: null })
+}
+const unknownKey = (c: AppContext) => c.json({ ok: false, error: 'unknown_key', message: 'Keys that can be pasted here: ' + Object.keys(KEYS).join(', ') + '.' }, 404)
+app.put('/api/keys/:name', (c) => (isKeyName(c.req.param('name')) ? putKey(c, c.req.param('name') as KeyName) : unknownKey(c)))
+app.delete('/api/keys/:name', (c) => (isKeyName(c.req.param('name')) ? deleteKey(c, c.req.param('name') as KeyName) : unknownKey(c)))
+app.put('/api/hf-token', (c) => putKey(c, 'hf'))
+app.delete('/api/hf-token', (c) => deleteKey(c, 'hf'))
 
 const AddModel = z.discriminatedUnion('provider', [
   z.object({
