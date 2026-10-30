@@ -385,7 +385,7 @@ const SCRIPT = String.raw`
   // MAPS, drawn here from OpenStreetMap's tiles: the places numbered, a
   // route as a line, zoom buttons, the credit OpenStreetMap asks for, and
   // the places listed with links. Drag to move it (one finger or the
-  // mouse), pinch or double-click to zoom, ⌖ to go back to the start.
+  // mouse), pinch or double-click to zoom, ◎ to go back to the start.
   const TILE = 256;
   function project(lat, lon, z) {
     const n = TILE * Math.pow(2, z), s = Math.sin(Math.max(-85, Math.min(85, lat)) * Math.PI / 180);
@@ -421,7 +421,7 @@ const SCRIPT = String.raw`
       for (let tx = Math.floor((cx - W / 2) / TILE); tx <= Math.floor((cx + W / 2) / TILE); tx++) {
         for (let ty = Math.floor((cy - H / 2) / TILE); ty <= Math.floor((cy + H / 2) / TILE); ty++) {
           if (ty < 0 || ty >= n) continue;
-          parts.push(at(el('img', { className: 'tile', alt: '', draggable: false, src: 'https://tile.openstreetmap.org/' + z + '/' + (((tx % n) + n) % n) + '/' + ty + '.png' }), tx * TILE - cx, ty * TILE - cy));
+          parts.push(at(el('img', { className: 'map-tile', alt: '', draggable: false, src: 'https://tile.openstreetmap.org/' + z + '/' + (((tx % n) + n) % n) + '/' + ty + '.png' }), tx * TILE - cx, ty * TILE - cy));
         }
       }
       if (view.route) {
@@ -439,7 +439,7 @@ const SCRIPT = String.raw`
     const zoom = (d) => { z = Math.max(2, Math.min(18, z + d)); draw(); };
     const reset = () => { z = z0; centre = start.slice(); draw(); };
     const box = el('div', { className: 'map', title: 'Drag to move · pinch or double-click to zoom' }, stage,
-      el('div', { className: 'map-zoom' }, el('button', { type: 'button', textContent: '+', title: 'Zoom in', onclick: () => zoom(1) }), el('button', { type: 'button', textContent: '−', title: 'Zoom out', onclick: () => zoom(-1) }), el('button', { type: 'button', textContent: '⌖', title: 'Back to the start', onclick: reset })),
+      el('div', { className: 'map-zoom' }, el('button', { type: 'button', textContent: '+', title: 'Zoom in', onclick: () => zoom(1) }), el('button', { type: 'button', textContent: '−', title: 'Zoom out', onclick: () => zoom(-1) }), el('button', { type: 'button', textContent: '◎', title: 'Back to the start', onclick: reset })),
       el('div', { className: 'map-credit' }, '© ', link('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' contributors'));
     // Dragging: every pointer on the map is followed; one moves the map,
     // two pinch to zoom. A drag is not a click, so a pin dragged over
@@ -714,8 +714,38 @@ const SCRIPT = String.raw`
       await api('/api/models/' + [m.provider, ...m.id.split('/')].map(encodeURIComponent).join('/'), { method: 'DELETE' }); loadModels();
     })) : [li('None yet — add one above, or list them in HF_MODELS.')]));
     renderImageModels();
-    $('add-note').textContent = body.huggingface ? '' : 'HF_TOKEN is not stored: public Spaces work, Inference Providers models need it.';
+    $('add-note').textContent = body.huggingface ? '' : 'Inference Providers models need a Hugging Face token (above). Public Spaces work without one.';
+    showHfToken(body.hfToken || null);
   }
+
+  // THE HUGGING FACE TOKEN: pasted here, kept sealed by the agent, never
+  // shown again. One stored as the HF_TOKEN secret wins and is left alone.
+  function showHfToken(source) {
+    const status = {
+      secret: 'Stored as this environment’s HF_TOKEN secret in Orunbase. That one is used; change it there.',
+      app: 'Saved here, encrypted. Paste a new one to replace it.',
+      unreadable: 'A token was saved, but the access key has changed since, so it can no longer be read. Paste it again.',
+    }[source] || 'No token yet. Paste one to use Hugging Face models.';
+    $('hf-status').textContent = status;
+    $('hf-entry').hidden = source === 'secret';
+    $('hf-remove').hidden = source !== 'app' && source !== 'unreadable';
+    $('hf-save').textContent = source === 'app' ? 'Replace token' : 'Save token';
+  }
+  $('hf-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const token = $('hf-token').value.trim();
+    if (!token) return;
+    try {
+      await api('/api/hf-token', { method: 'PUT', body: JSON.stringify({ token }) });
+      $('hf-token').value = ''; $('hf-note').textContent = 'Saved. Hugging Face models work now, with no redeploy.';
+      await loadModels();
+    } catch (err) { $('hf-note').textContent = err.message; }
+  };
+  $('hf-remove').onclick = async () => {
+    if (!confirm('Remove the Hugging Face token from this agent?')) return;
+    try { await api('/api/hf-token', { method: 'DELETE' }); $('hf-note').textContent = 'Removed.'; await loadModels(); }
+    catch (err) { $('hf-note').textContent = err.message; }
+  };
 
   async function loadMemories() {
     memories = (await api('/api/memories')).memories;
@@ -1152,7 +1182,7 @@ main{flex:1;display:flex;min-height:0}
 .map-wrap{margin:8px 0 0;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-width:0}
 .map{position:relative;width:600px;max-width:100%;height:320px;overflow:hidden;cursor:grab;touch-action:none;user-select:none;border-radius:10px;border:1px solid var(--line);background:#e8e6df}
 .map-stage{position:absolute;inset:0}.map.dragging{cursor:grabbing}.map.dragging .pin{pointer-events:none}
-.map img.tile{position:absolute;width:256px;height:256px;max-width:none;margin:0;user-select:none}
+.map img.map-tile{position:absolute;width:256px;height:256px;max-width:none;margin:0;padding:0;border:0;border-radius:0;user-select:none}
 .map-route{position:absolute;left:50%;top:50%;overflow:visible;pointer-events:none}
 .map-route polyline{fill:none;stroke:#3b5bdb;stroke-width:5;stroke-linejoin:round;stroke-linecap:round;opacity:.85}
 .pin{position:absolute;transform:translate(-50%,-50%);width:24px;height:24px;border-radius:50%;background:#b42318;color:#fff;border:2px solid #fff;font:700 12px/20px system-ui,sans-serif;text-align:center;text-decoration:none;box-shadow:0 1px 4px rgb(0 0 0 / .4)}
@@ -1461,7 +1491,20 @@ input,select,textarea{font-size:16px}
         <section>
           <h2>Music model</h2>
           <select id="music-model" aria-label="Music model"></select>
-          <p class="hint" id="music-note">Makes the music you ask for, on a free Hugging Face Space. It takes a minute or two; with HF_TOKEN stored it uses your own free GPU allowance.</p>
+          <p class="hint" id="music-note">Makes the music you ask for, on a free Hugging Face Space. It takes a minute or two; with a Hugging Face token saved it uses your own free GPU allowance.</p>
+        </section>
+        <section>
+          <h2>Hugging Face token</h2>
+          <form class="stack" id="hf-form">
+            <p class="hint" id="hf-status"></p>
+            <div class="row" id="hf-entry">
+              <input id="hf-token" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false" aria-label="Hugging Face token" style="flex:1">
+              <button id="hf-save">Save token</button>
+            </div>
+            <div class="row"><button type="button" id="hf-remove" hidden>Remove token</button></div>
+            <p class="hint">Create one at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co → Access Tokens</a>: <strong>Fine-grained</strong>, with <strong>Make calls to Inference Providers</strong>. It is kept encrypted with this agent, is never shown again, and is sent only to Hugging Face. It lets you use Inference Providers models, and music on your own free GPU allowance.</p>
+            <p class="hint" id="hf-note" role="status"></p>
+          </form>
         </section>
         <section>
           <h2>Add a model</h2>

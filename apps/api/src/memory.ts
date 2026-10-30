@@ -96,6 +96,8 @@ export interface MemoryStore {
   deleteConversation(id: string): Promise<boolean>
   getSetting(key: SettingKey): Promise<string | null>
   setSetting(key: SettingKey, value: string): Promise<void>
+  getVault(name: string): Promise<string | null>
+  setVault(name: string, sealed: string | null): Promise<void>
 }
 
 export type SettingKey = 'imageModel' | 'musicModel'
@@ -182,6 +184,10 @@ export class AgentMemory extends DurableObject implements MemoryStore {
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS vault (
+          name TEXT PRIMARY KEY,
+          sealed TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS notes (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -367,6 +373,17 @@ export class AgentMemory extends DurableObject implements MemoryStore {
 
   async setSetting(key: SettingKey | 'paused', value: string): Promise<void> {
     this.ctx.storage.sql.exec('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value)
+  }
+
+  // THE VAULT: secrets the owner pasted in the page, already sealed by
+  // vault.ts. They are never listed and never leave the Worker.
+  async getVault(name: string): Promise<string | null> {
+    return this.ctx.storage.sql.exec<{ sealed: string }>('SELECT sealed FROM vault WHERE name = ?', name).toArray()[0]?.sealed ?? null
+  }
+
+  async setVault(name: string, sealed: string | null): Promise<void> {
+    if (sealed === null) this.ctx.storage.sql.exec('DELETE FROM vault WHERE name = ?', name)
+    else this.ctx.storage.sql.exec('INSERT INTO vault (name, sealed) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET sealed = excluded.sealed', name, sealed)
   }
 
   // THE ACTIVITY LOG: every tool call the agent made, allowed or blocked —

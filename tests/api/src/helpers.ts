@@ -5,7 +5,7 @@ import { AgentMemory } from "@/memory";
 import type { Env } from "@/env";
 
 export const KEY = "test-access-key";
-export const HF_TOKEN = "hf_test_token";
+export const HF_TOKEN = "hf_StandInToken0000000000000000000000";
 export const auth = (key = KEY) => ({ authorization: `Bearer ${key}`, "content-type": "application/json" });
 
 /**

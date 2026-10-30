@@ -134,7 +134,10 @@ Caveats that matter:
     until it is stored;
   - `HF_TOKEN` — a Hugging Face fine-grained token with "Make calls to
     Inference Providers" (and read access for private Spaces); Inference
-    Providers models answer `409` without it, public Spaces do not need it;
+    Providers models answer `409` without it, public Spaces do not need it.
+    The owner may instead paste it in the page (`PUT /api/hf-token`): it is
+    kept in MEMORY sealed under a key derived from `AGENT_ACCESS_KEY`
+    (`vault.ts`), never returned, and the secret wins when both exist;
   - `HF_MODELS` — the Hugging Face models and Spaces to offer from the start,
     comma-separated, a Space as `space:<owner>/<name>[#<endpoint>]`;
   - `TAVILY_API_KEY` — web search: with it the agent is offered

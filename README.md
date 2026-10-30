@@ -62,7 +62,19 @@ error names it; switch back. To use any other Workers AI model, add its
 Workers AI works with no extra setup. To use Hugging Face as well, create a
 [fine-grained access token](https://huggingface.co/settings/tokens) with
 **Make calls to Inference Providers**. Add **Read access to contents of all
-repos** if you want to reach your private Spaces. Store it, then redeploy:
+repos** if you want to reach your private Spaces.
+
+There are two ways to give the agent the token:
+
+- **In the page:** Settings (⚙) → **Models** → **Hugging Face token**. It
+  works at once, with no redeploy. The agent stores it encrypted (AES-GCM,
+  under a key derived from `AGENT_ACCESS_KEY`), never sends it back to the
+  page, and sends it only to Hugging Face. **Remove token** deletes it. If
+  you rotate the access key, the stored token can no longer be read, and the
+  page asks for it again. Anyone with the access key can replace or remove
+  it, but not read it.
+- **As an Orun secret**, which wins over a token pasted in the page. Store it,
+  then redeploy:
 
 ```bash
 orun secrets set HF_TOKEN --org <ws> --env prod
@@ -277,7 +289,7 @@ restaurants, cafes, hotels, sights, museums, beaches, pharmacies, ATMs, fuel
 and more near a place (Overpass). The page draws the map itself from
 OpenStreetMap's tiles: the places numbered, the route as a line, zoom
 buttons, and the places listed. Drag a map to move it, with the mouse or
-one finger. Pinch or double-click to zoom, and press ⌖ to go back to the
+one finger. Pinch or double-click to zoom, and press ◎ to go back to the
 start. The places are listed with their links, hours and websites. The
 built-in **trip-planner** skill uses all three. A map is the only thing the
 page loads from outside the Worker. OpenStreetMap's data is edited by anyone,
