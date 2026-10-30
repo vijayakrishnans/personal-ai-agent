@@ -1,0 +1,32 @@
+apiVersion: sourceplane.io/v1
+kind: Component
+metadata:
+  name: api-tests
+  description: The agent's vitest suite (the page, /health, the owner's door, its models and Spaces, its memory, chat on Workers AI and Hugging Face), driven in-process with app.request() against the real Durable Object's SQL on SQLite and Hugging Face stood in for over HTTP, run with pnpm test
+spec:
+  type: turbo-package
+  lifecycle: production
+  owner: platform
+  # Its pages, attached to it in the workspace's catalog: what the Docs
+  # library shows for it, and what the catalog's docs and runbook checks read.
+  # Generated from what this manifest and its sources declare.
+  docs:
+    overview: docs/overview.md
+    pages:
+      - { path: docs/architecture.md, role: architecture, title: Architecture }
+      - { path: docs/runbook.md, role: runbook, title: Runbook }
+  domain: tests
+  subscribe:
+    environments:
+      - name: dev
+        profile: quick-check
+  parameters:
+    nodeVersion: "22"
+    pnpmVersion: "10.12.1"
+    buildCommand: pnpm exec turbo run build --filter=./
+    typecheckCommand: pnpm exec turbo run typecheck --filter=./
+    preBuildCommand: pnpm exec turbo run test --filter=./
+  labels:
+    team: platform
+    layer: test
+# orun: redeploy 01-product as_5d73f683b0c44089a80e
