@@ -1050,7 +1050,7 @@ const SCRIPT = String.raw`
     const provider = $('add-provider').value, space = provider === 'space';
     $('add-api').hidden = !space; $('add-tools-row').hidden = space;
     $('add-id').placeholder = space ? 'owner/space — e.g. your-name/your-chat-space'
-      : provider === 'workers-ai' ? '@cf/owner/name — e.g. @cf/qwen/qwen3-30b-a3b-fp8' : 'owner/name — e.g. openai/gpt-oss-120b';
+      : provider === 'workers-ai' ? '@cf/owner/name — e.g. @cf/qwen/qwen3-30b-a3b-fp8' : 'Paste a model — e.g. Qwen/Qwen3.8-27B or its huggingface.co link';
   };
   $('image-model').onchange = async () => {
     try { chosenImageModel = (await api('/api/state', { method: 'PUT', body: JSON.stringify({ imageModel: $('image-model').value }) })).imageModel; $('image-note').textContent = 'Saved: new pictures use it.'; }
@@ -1089,15 +1089,25 @@ const SCRIPT = String.raw`
   };
   $('add').onsubmit = async (e) => {
     e.preventDefault();
-    const provider = $('add-provider').value;
-    const body = { provider, id: $('add-id').value.trim() };
+    // Paste anything that names a model: owner/name, its huggingface.co page,
+    // a Space's page, or @cf/owner/name. The kind follows from what it is.
+    let id = $('add-id').value.trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
+    let provider = $('add-provider').value;
+    const page = /^(?:https?:\/\/)?(?:www\.)?(?:hf\.co|huggingface\.co)\/(spaces\/)?([^/\s]+\/[^/\s]+)/i.exec(id);
+    if (page) { id = page[2]; provider = page[1] ? 'space' : 'huggingface'; }
+    else if (id.startsWith('@cf/')) provider = 'workers-ai';
+    else if (id.startsWith('space:')) { id = id.slice(6); provider = 'space'; }
+    if (provider !== $('add-provider').value) { $('add-provider').value = provider; $('add-provider').onchange(); }
+    const body = { provider, id };
     if ($('add-label').value.trim()) body.label = $('add-label').value.trim();
     if (provider === 'space') { if ($('add-api').value.trim()) body.apiName = $('add-api').value.trim().replace(/^\//, ''); }
     else body.tools = $('add-tools').checked;
+    $('add-note').textContent = provider === 'huggingface' ? 'Checking ' + id + ' on Hugging Face…' : '';
     try {
-      const { model } = await api('/api/models', { method: 'POST', body: JSON.stringify(body) });
+      const { model, note } = await api('/api/models', { method: 'POST', body: JSON.stringify(body) });
       $('add').reset(); $('add-provider').onchange();
       store.set('agent.model', model.key); await loadModels();
+      $('add-note').textContent = note || ('Added ' + model.label + '.');
     } catch (err) { $('add-note').textContent = err.message; }
   };
   $('input').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('ask').requestSubmit(); } };
@@ -1535,7 +1545,7 @@ input,select,textarea{font-size:16px}
               <option value="space">Hugging Face: Gradio Space</option>
               <option value="workers-ai">Workers AI: any other @cf/… model</option>
             </select>
-            <input id="add-id" placeholder="owner/name — e.g. openai/gpt-oss-120b" required>
+            <input id="add-id" placeholder="Paste a model — e.g. Qwen/Qwen3.8-27B or its huggingface.co link" required>
             <input id="add-label" placeholder="Label (optional)">
             <label class="hint" id="add-tools-row"><input type="checkbox" id="add-tools" checked> Let it use the agent’s tools</label>
             <input id="add-api" placeholder="Space endpoint (default: chat)" hidden>

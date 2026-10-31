@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import app from "@/index";
 import { catalog, parseHfModels, WORKERS_AI_MODELS } from "@/models";
 import { answerFrom, spaceBaseUrl } from "@/spaces";
 import { DatabaseSync } from "node:sqlite";
-import { auth, env, KEY, json, memoryObject } from "./helpers";
+import { auth, env, hfStandIn, HF_TOKEN, KEY, json, memoryObject } from "./helpers";
 
 describe("HF_MODELS", () => {
   it("reads models and Spaces, comma- or newline-separated, and drops what does not parse", () => {
@@ -47,7 +47,12 @@ describe("a Space's address and answer", () => {
 });
 
 describe("/api/models", () => {
-  const e = () => env({ AGENT_ACCESS_KEY: KEY });
+  let hf: Awaited<ReturnType<typeof hfStandIn>>;
+  beforeAll(async () => {
+    hf = await hfStandIn();
+  });
+  afterAll(() => hf.close());
+  const e = (over = {}) => env({ AGENT_ACCESS_KEY: KEY, HF_HUB_URL: hf.hub, ...over });
   const post = (b: unknown) => ({ method: "POST", headers: auth(), body: JSON.stringify(b) });
 
   it("lists the built-in models, the default first, and whether Hugging Face is connected", async () => {
@@ -99,6 +104,56 @@ describe("/api/models", () => {
     expect((await app.request("/api/models/space/me/my-chat", { method: "DELETE", headers: auth() }, x)).status).toBe(200);
     expect((await app.request("/api/models/space/me/my-chat", { method: "DELETE", headers: auth() }, x)).status).toBe(404);
     expect((await x.memory.listModels()).map((m) => m.id)).toEqual(["meta-llama/Llama-3.3-70B-Instruct:groq"]);
+  });
+
+  it("checks a pasted Hugging Face model on the Hub and says who serves it", async () => {
+    const x = e({ HF_TOKEN });
+    const res = await app.request("/api/models", post({ provider: "huggingface", id: "Qwen/Qwen3.8-27B" }), x);
+    const body = await json(res);
+    expect(res.status).toBe(201);
+    expect(body).toMatchObject({ model: { key: "huggingface:Qwen/Qwen3.8-27B", tools: true }, gated: false });
+    expect(body.providers).toEqual(["novita", "cerebras", "nscale", "featherless-ai", "scaleway"]);
+    expect(body.note).toContain("novita, cerebras, nscale, featherless-ai and 1 more");
+    expect(body.note).toContain("a free account works");
+    expect(hf.calls.at(-1)).toMatchObject({ method: "GET", auth: `Bearer ${HF_TOKEN}` });
+  });
+
+  it("warns that a gated model's licence must be accepted, and that a token is needed", async () => {
+    const body = await json(await app.request("/api/models", post({ provider: "huggingface", id: "meta-llama/Llama-3.3-70B-Instruct" }), e()));
+    expect(body.gated).toBe(true);
+    expect(body.note).toContain("accept its licence at huggingface.co/meta-llama/Llama-3.3-70B-Instruct");
+    expect(body.note).toContain("Paste a Hugging Face token");
+  });
+
+  it("refuses, with the reason, a model that is not for chat, not served, not there, or a provider that does not serve it", async () => {
+    const cases: [string, string, string][] = [
+      ["Wan-AI/Wan2.2-I2V-A14B", "not_a_chat_model", "an image-to-video model (it makes video from a picture), not a chat model"],
+      ["some/unserved", "not_served", "No Inference Provider runs some/unserved"],
+      ["nobody/nothing", "model_not_found", "no public model nobody/nothing"],
+      ["Qwen/Qwen3.8-27B:groq", "provider_not_serving", "groq does not serve Qwen/Qwen3.8-27B for chat"],
+    ];
+    for (const [id, error, says] of cases) {
+      const x = e();
+      const res = await app.request("/api/models", post({ provider: "huggingface", id }), x);
+      const body = await json(res);
+      expect([res.status, body.error], id).toEqual([422, error]);
+      expect(body.message).toContain(says);
+      expect(await x.memory.listModels()).toEqual([]);
+    }
+  });
+
+  it("says the token was refused, without locking the page (never a 401)", async () => {
+    const res = await app.request("/api/models", post({ provider: "huggingface", id: "Qwen/Qwen3.8-27B" }), e({ HF_TOKEN: "hf_expired" }));
+    const body = await json(res);
+    expect([res.status, body.error]).toEqual([422, "hf_token_rejected"]);
+    expect(body.message).toContain("huggingface.co/settings/tokens");
+    expect(JSON.stringify(body)).not.toContain("hf_expired");
+  });
+
+  it("still adds when the Hub cannot be reached, and says it did not check", async () => {
+    const res = await app.request("/api/models", post({ provider: "huggingface", id: "Qwen/Qwen3.8-27B" }), e({ HF_HUB_URL: "http://127.0.0.1:9" }));
+    expect(res.status).toBe(201);
+    expect((await json(res)).note).toContain("Added without checking");
   });
 
   it("refuses what is not a model id, a Space id or an endpoint name", async () => {

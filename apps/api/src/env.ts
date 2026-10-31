@@ -33,8 +33,10 @@ export type Env = {
   OPENALEX_API_KEY?: string
   // TEST ONLY — where Hugging Face is. Unset, the router is
   // https://router.huggingface.co/v1 and a Space `<owner>/<name>` is
-  // https://<owner>-<name>.hf.space; the e2e points both at a local stand-in.
+  // https://<owner>-<name>.hf.space, and the Hub (hub.ts) is
+  // https://huggingface.co; the e2e points them at a local stand-in.
   HF_ROUTER_URL?: string
+  HF_HUB_URL?: string
   HF_SPACES_URL?: string
   // TEST ONLY — where the news feed and web search are (web.ts), and the open
   // services the agent looks things up in (lookup.ts).
