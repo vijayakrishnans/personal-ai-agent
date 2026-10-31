@@ -132,7 +132,10 @@ const body = (req: IncomingMessage) =>
   });
 
 /** The Hub's models in the stand-in: chat providers, or another task's. */
-const HUB_MODELS: Record<string, { providers: string[]; task?: string; pipeline_tag?: string; gated?: boolean | string }> = {
+const HUB_MODELS: Record<string, { providers: string[]; task?: string; providerId?: string; pipeline_tag?: string; gated?: boolean | string }> = {
+  "Wan-AI/Wan2.2-TI2V-5B": { providers: ["fal-ai"], task: "text-to-video", providerId: "fal-ai/wan/v2.2-5b/text-to-video", pipeline_tag: "text-to-video" },
+  "Wan-AI/Wan2.1-T2V-14B": { providers: ["fal-ai", "wavespeed"], task: "text-to-video", providerId: "fal-ai/wan-t2v", pipeline_tag: "text-to-video" },
+  "only/wavespeed": { providers: ["wavespeed"], task: "text-to-video", pipeline_tag: "text-to-video" },
   "meta-llama/Llama-3.3-70B-Instruct": { providers: ["groq", "novita"], pipeline_tag: "text-generation", gated: "manual" },
   "Qwen/Qwen3.8-27B": { providers: ["novita", "cerebras", "nscale", "featherless-ai", "scaleway"], pipeline_tag: "image-text-to-text", gated: false },
   "Wan-AI/Wan2.2-I2V-A14B": { providers: ["fal-ai"], task: "image-to-video", pipeline_tag: "image-to-video" },
@@ -171,8 +174,35 @@ export async function hfStandIn() {
       const chat = (...names: string[]) => Object.fromEntries(names.map((n) => [n, { status: "live", providerId: n, task: "conversational" }]));
       const record = HUB_MODELS[hub[1] ?? ""];
       if (!record) return json(404, { error: "Repository not found" });
-      const { providers, task, ...rest } = record;
-      return json(200, { id: hub[1], ...rest, inferenceProviderMapping: task ? Object.fromEntries(providers.map((n) => [n, { status: "live", providerId: n, task }])) : chat(...providers) });
+      const { providers, task, providerId, ...rest } = record;
+      return json(200, { id: hub[1], ...rest, inferenceProviderMapping: task ? Object.fromEntries(providers.map((n) => [n, { status: "live", providerId: (n === "fal-ai" && providerId) || n, task }])) : chat(...providers) });
+    }
+    // fal-ai's queue, through the router: submit, a status that completes on
+    // the second check, the result, and the clip on fal's CDN.
+    const fal = /^\/fal-ai\/(.+?)\?_subdomain=queue$/.exec(path);
+    if (fal) {
+      if (req.headers.authorization !== `Bearer ${HF_TOKEN}`) return json(401, { error: "Invalid credentials in Authorization header" });
+      const route = fal[1] ?? "";
+      if (req.method === "POST") {
+        const prompt = String((parsed as { prompt?: string }).prompt ?? "");
+        if (prompt.includes("broke")) return json(402, { error: "You have exceeded your monthly included credits for Inference Providers." });
+        const id = `rq${jobs.size + 1}`;
+        jobs.set(id, prompt.includes("melt") ? "fail" : "0");
+        return json(200, { request_id: id, status: "IN_QUEUE", response_url: `https://queue.fal.run/fal-ai/wan/requests/${id}` });
+      }
+      const status = /^fal-ai\/wan\/requests\/(\w+)\/status$/.exec(route);
+      if (status) {
+        const seen = jobs.get(status[1] ?? "");
+        if (seen === "fail") return json(200, { status: "FAILED", error: "GPU out of memory" });
+        jobs.set(status[1] ?? "", String(Number(seen) + 1));
+        return json(200, { status: Number(seen) >= 1 ? "COMPLETED" : "IN_PROGRESS" });
+      }
+      const result = /^fal-ai\/wan\/requests\/(\w+)$/.exec(route);
+      if (result) return json(200, { video: { url: `http://${req.headers.host}/cdn/clip.mp4`, content_type: "video/mp4" } });
+    }
+    if (path === "/cdn/clip.mp4") {
+      res.writeHead(200, { "content-type": "video/mp4" });
+      return res.end(Buffer.from("fake-mp4-bytes"));
     }
     if (path === "/v1/chat/completions") {
       if (req.headers.authorization !== `Bearer ${HF_TOKEN}`) return json(401, { error: "Invalid credentials in Authorization header" });

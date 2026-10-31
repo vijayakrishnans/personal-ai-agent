@@ -24,6 +24,7 @@ import { SpaceError } from './spaces'
 import { checkHubModel, hfFailure } from './hub'
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, imageModel, imageType } from './images'
 import { DEFAULT_MUSIC_MODEL, MUSIC_MODELS, musicModel } from './music'
+import { chosenVideoModel, DEFAULT_VIDEO_MODEL, MAX_ADDED_VIDEO_MODELS, parseAddedVideoModels, videoModels, videoRoute } from './video'
 import { hasSecret, redact } from './secrets'
 import { BUILT_IN_SKILLS, MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, SKILL_NAME, skillsOnOffer } from './skills'
 import { page } from './ui'
@@ -88,6 +89,7 @@ app.get('/api/models', async (c) => {
     models: await models(c),
     images: { models: IMAGE_MODELS, default: DEFAULT_IMAGE_MODEL },
     music: { models: MUSIC_MODELS.map(({ id, label }) => ({ id, label })), default: DEFAULT_MUSIC_MODEL },
+    video: { models: videoModels(await addedVideoModels(c.var.memory)), default: DEFAULT_VIDEO_MODEL },
   })
 })
 
@@ -282,6 +284,7 @@ const SavedMessage = z.object({
   error: z.boolean().optional(),
   images: z.array(z.object({ id: z.number().int().positive(), prompt: z.string().max(2000) })).max(8).optional(),
   tracks: z.array(z.object({ id: z.number().int().positive(), style: z.string().max(1000), seconds: z.number().optional() })).max(4).optional(),
+  videos: z.array(z.object({ id: z.number().int().positive(), prompt: z.string().max(2000) })).max(2).optional(),
   maps: z.array(z.record(z.string(), z.unknown())).max(4).optional(),
 })
 const SaveConversation = z.object({ title: z.string().max(MAX_TITLE_CHARS).optional(), messages: z.array(SavedMessage).min(1).max(400) })
@@ -331,6 +334,46 @@ app.delete('/api/images/:id', async (c) => {
 })
 
 // MUSIC the agent made: listed, played (the audio itself), deleted.
+// VIDEOS: the agent's videos (video.ts), played by the page; and the video
+// models the owner adds by pasting a text-to-video model's id, checked on
+// the Hub first.
+const addedVideoModels = async (memory: MemoryStore) => parseAddedVideoModels(await memory.getSetting('videoModels'))
+const videoId = (raw: string) => (/^[1-9]\d{0,9}$/.test(raw) ? Number(raw) : null)
+
+app.get('/api/videos', async (c) => c.json({ ok: true, videos: await c.var.memory.listVideos() }))
+app.get('/api/videos/:id', async (c) => {
+  const id = videoId(c.req.param('id'))
+  const video = id ? await c.var.memory.getVideo(id) : null
+  if (!video) return c.json({ ok: false, error: 'not_found' }, 404)
+  const bytes = Uint8Array.from(atob(video.base64), (ch) => ch.charCodeAt(0))
+  return c.body(bytes, 200, { 'content-type': video.type, 'cache-control': 'private, max-age=31536000, immutable' })
+})
+app.delete('/api/videos/:id', async (c) => {
+  const id = videoId(c.req.param('id'))
+  return id && (await c.var.memory.deleteVideo(id)) ? c.json({ ok: true }) : c.json({ ok: false, error: 'not_found' }, 404)
+})
+app.post('/api/video-models', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { id?: unknown } | null
+  const id = typeof body?.id === 'string' ? body.id.trim() : ''
+  if (!SPACE_ID.test(id)) return c.json({ ok: false, error: 'invalid_model', message: 'Paste a Hub model id, owner/name — e.g. Wan-AI/Wan2.2-T2V-A14B' }, 400)
+  const added = await addedVideoModels(c.var.memory)
+  if (videoModels(added).some((m) => m.id === id)) return c.json({ ok: false, error: 'already_added', message: `${id} is already one of the video models.` }, 409)
+  if (added.length >= MAX_ADDED_VIDEO_MODELS) return c.json({ ok: false, error: 'too_many_models', message: `At most ${MAX_ADDED_VIDEO_MODELS} added video models; remove one first.` }, 409)
+  const route = await videoRoute(c.env, id)
+  if ('error' in route) return c.json({ ok: false, error: 'not_a_video_model', message: route.error }, 422)
+  await c.var.memory.setSetting('videoModels', JSON.stringify([...added, id]))
+  await c.var.memory.setSetting('videoModel', id)
+  return c.json({ ok: true, model: { id, label: id, added: true }, note: `Added ${id}; new videos use it.` }, 201)
+})
+app.delete('/api/video-models/:owner/:name', async (c) => {
+  const id = `${c.req.param('owner')}/${c.req.param('name')}`
+  const added = await addedVideoModels(c.var.memory)
+  if (!added.includes(id)) return c.json({ ok: false, error: 'not_found' }, 404)
+  await c.var.memory.setSetting('videoModels', JSON.stringify(added.filter((m) => m !== id)))
+  if ((await c.var.memory.getSetting('videoModel')) === id) await c.var.memory.setSetting('videoModel', DEFAULT_VIDEO_MODEL)
+  return c.json({ ok: true })
+})
+
 app.get('/api/music', async (c) => c.json({ ok: true, tracks: await c.var.memory.listTracks() }))
 
 app.get('/api/music/:id', async (c) => {
@@ -410,28 +453,33 @@ const state = async (memory: MemoryStore) => ({
   paused: await memory.isPaused(),
   imageModel: imageModel(await memory.getSetting('imageModel')).id,
   musicModel: musicModel(await memory.getSetting('musicModel')).id,
+  videoModel: await chosenVideoModel(memory),
 })
 
 app.get('/api/state', async (c) => c.json(await state(c.var.memory)))
 
 app.put('/api/state', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { paused?: unknown; imageModel?: unknown; musicModel?: unknown } | null
+  const body = (await c.req.json().catch(() => null)) as { paused?: unknown; imageModel?: unknown; musicModel?: unknown; videoModel?: unknown } | null
   const paused = body?.paused
   const image = body?.imageModel
   const music = body?.musicModel
   const validImage = typeof image === 'string' && IMAGE_MODELS.some((m) => m.id === image)
   const validMusic = typeof music === 'string' && MUSIC_MODELS.some((m) => m.id === music)
+  const video = body?.videoModel
+  const validVideo = typeof video === 'string' && videoModels(await addedVideoModels(c.var.memory)).some((m) => m.id === video)
   if (
     (paused !== undefined && typeof paused !== 'boolean') ||
     (image !== undefined && !validImage) ||
     (music !== undefined && !validMusic) ||
-    (paused === undefined && image === undefined && music === undefined)
+    (video !== undefined && !validVideo) ||
+    (paused === undefined && image === undefined && music === undefined && video === undefined)
   ) {
-    return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true|false}, {"imageModel": one of the image models} and/or {"musicModel": one of the music models}' }, 400)
+    return c.json({ ok: false, error: 'invalid_state', message: 'send {"paused": true|false}, {"imageModel": one of the image models} {"musicModel": one of the music models} and/or {"videoModel": one of the video models}' }, 400)
   }
   if (typeof paused === 'boolean') await c.var.memory.setPaused(paused)
   if (validImage) await c.var.memory.setSetting('imageModel', image)
   if (validMusic) await c.var.memory.setSetting('musicModel', music)
+  if (validVideo) await c.var.memory.setSetting('videoModel', video)
   return c.json(await state(c.var.memory))
 })
 
@@ -490,7 +538,7 @@ app.get('/health', (c) => {
       configured: parseHfModels(env?.HF_MODELS).length,
     },
     tools: toolNames(env),
-    endpoints: { chat: '/api/chat', conversations: '/api/conversations', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', music: '/api/music', saved: '/api/saved', skills: '/api/skills', state: '/api/state', activity: '/api/activity', health: '/health' },
+    endpoints: { chat: '/api/chat', conversations: '/api/conversations', models: '/api/models', memories: '/api/memories', notes: '/api/notes', images: '/api/images', music: '/api/music', videos: '/api/videos', saved: '/api/saved', skills: '/api/skills', state: '/api/state', activity: '/api/activity', health: '/health' },
   })
 })
 
