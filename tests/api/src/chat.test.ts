@@ -108,9 +108,17 @@ describe("POST /api/chat — Hugging Face", () => {
     const body = await json(await app.request("/api/chat", chat("space:me/my-chat", "first", "ok", "hello space"), x));
     expect(body).toEqual({ ok: true, text: "me/my-chat says: hello space", model: "space:me/my-chat", tools: [], redacted: 0 });
     const calls = hf.calls.slice(n);
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /spaces/me/my-chat/gradio_api/call/chat", "GET /spaces/me/my-chat/gradio_api/call/chat/" + calls[1]?.path.split("/").pop()]);
-    expect(calls[0]?.body).toEqual({ data: ["hello space"] });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /spaces/me/my-chat/gradio_api/info", "POST /spaces/me/my-chat/gradio_api/call/chat", "GET /spaces/me/my-chat/gradio_api/call/chat/" + calls[2]?.path.split("/").pop()]);
+    expect(calls[1]?.body).toEqual({ data: ["hello space"] });
     expect(calls.every((c) => c.auth === `Bearer ${HF_TOKEN}`)).toBe(true);
+  });
+
+  it("fills a Blocks Space's other inputs from its API description, the message in its multimodal box", async () => {
+    const x = hfEnv({ HF_MODELS: "space:me/multi#chat_fn" });
+    const n = hf.calls.length;
+    const body = await json(await app.request("/api/chat", chat("space:me/multi", "namaskaram"), x));
+    expect(body).toMatchObject({ ok: true, text: "me/multi says: namaskaram" });
+    expect(hf.calls.slice(n).find((c) => c.method === "POST")?.body).toEqual({ data: [{ text: "namaskaram", files: [] }, false] });
   });
 
   it("says which Space failed, and why", async () => {
