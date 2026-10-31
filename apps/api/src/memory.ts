@@ -45,6 +45,10 @@ export type Image = { id: number; prompt: string; model: string; createdAt: stri
 // how long, and when. Its audio is fetched on its own (getTrack).
 export type TrackInfo = { id: number; style: string; lyrics: string; model: string; type: string; seconds: number; createdAt: string }
 
+// A video the agent made: the prompt, with which model, and when. Its bytes
+// are fetched on their own (getVideo).
+export type VideoInfo = { id: number; prompt: string; model: string; type: string; createdAt: string }
+
 // An answer (or anything else) the owner saved to their library: kept whole,
 // never put in a prompt.
 export type Saved = { id: number; text: string; source: string; createdAt: string }
@@ -84,6 +88,10 @@ export interface MemoryStore {
   getTrack(id: number): Promise<(TrackInfo & { base64: string }) | null>
   listTracks(): Promise<TrackInfo[]>
   deleteTrack(id: number): Promise<boolean>
+  saveVideo(video: Omit<VideoInfo, 'id' | 'createdAt'>, base64: string): Promise<VideoInfo>
+  getVideo(id: number): Promise<(VideoInfo & { base64: string }) | null>
+  listVideos(): Promise<VideoInfo[]>
+  deleteVideo(id: number): Promise<boolean>
   saveItem(text: string, source: string): Promise<Saved>
   listSaved(): Promise<Saved[]>
   deleteSaved(id: number): Promise<boolean>
@@ -100,7 +108,7 @@ export interface MemoryStore {
   setVault(name: string, sealed: string | null): Promise<void>
 }
 
-export type SettingKey = 'imageModel' | 'musicModel'
+export type SettingKey = 'imageModel' | 'musicModel' | 'videoModel' | 'videoModels'
 
 // A fact or a model the owner can see in full on one screen.
 export const MAX_MEMORY_CHARS = 500
@@ -121,6 +129,8 @@ export const MAX_SAVED = 500
 // A track's audio is kept in parts, each well under a row's 2 MB.
 export const MAX_TRACKS = 40
 export const TRACK_PART_CHARS = 1_500_000
+// A video is kept the same way, fewer of them: each is several MB.
+export const MAX_VIDEOS = 20
 export const MAX_SAVED_CHARS = 20_000
 export const DEFAULT_LIST = 'Notes'
 
@@ -228,6 +238,19 @@ export class AgentMemory extends DurableObject implements MemoryStore {
           n INTEGER NOT NULL,
           data TEXT NOT NULL,
           PRIMARY KEY (track_id, n)
+        );
+        CREATE TABLE IF NOT EXISTS videos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          prompt TEXT NOT NULL,
+          model TEXT NOT NULL,
+          type TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS video_parts (
+          video_id INTEGER NOT NULL,
+          n INTEGER NOT NULL,
+          data TEXT NOT NULL,
+          PRIMARY KEY (video_id, n)
         );
         CREATE TABLE IF NOT EXISTS conversations (
           id TEXT PRIMARY KEY,
@@ -532,6 +555,43 @@ export class AgentMemory extends DurableObject implements MemoryStore {
       .exec<{ id: number; style: string; lyrics: string; model: string; type: string; seconds: number; created_at: string }>(query, ...args)
       .toArray()
       .map((r) => ({ id: r.id, style: r.style, lyrics: r.lyrics, model: r.model, type: r.type, seconds: r.seconds, createdAt: r.created_at }))
+  }
+
+  // VIDEOS: the newest MAX_VIDEOS, each one's bytes (base64) in parts.
+  async saveVideo(video: Omit<VideoInfo, 'id' | 'createdAt'>, base64: string): Promise<VideoInfo> {
+    const sql = this.ctx.storage.sql
+    const createdAt = new Date().toISOString()
+    const { id } = sql.exec<{ id: number }>('INSERT INTO videos (prompt, model, type, created_at) VALUES (?, ?, ?, ?) RETURNING id', video.prompt, video.model, video.type, createdAt).one()
+    for (let n = 0; n * TRACK_PART_CHARS < base64.length; n++) {
+      sql.exec('INSERT INTO video_parts (video_id, n, data) VALUES (?, ?, ?)', id, n, base64.slice(n * TRACK_PART_CHARS, (n + 1) * TRACK_PART_CHARS))
+    }
+    sql.exec('DELETE FROM videos WHERE id NOT IN (SELECT id FROM videos ORDER BY id DESC LIMIT ?)', MAX_VIDEOS)
+    sql.exec('DELETE FROM video_parts WHERE video_id NOT IN (SELECT id FROM videos)')
+    return { id, ...video, createdAt }
+  }
+
+  async getVideo(id: number): Promise<(VideoInfo & { base64: string }) | null> {
+    const info = this.videos('SELECT id, prompt, model, type, created_at FROM videos WHERE id = ?', id)[0]
+    if (!info) return null
+    const parts = this.ctx.storage.sql.exec<{ data: string }>('SELECT data FROM video_parts WHERE video_id = ? ORDER BY n', id).toArray()
+    return { ...info, base64: parts.map((p) => p.data).join('') }
+  }
+
+  async listVideos(): Promise<VideoInfo[]> {
+    return this.videos('SELECT id, prompt, model, type, created_at FROM videos ORDER BY id DESC')
+  }
+
+  async deleteVideo(id: number): Promise<boolean> {
+    const sql = this.ctx.storage.sql
+    sql.exec('DELETE FROM video_parts WHERE video_id = ?', id)
+    return sql.exec('DELETE FROM videos WHERE id = ?', id).rowsWritten > 0
+  }
+
+  private videos(query: string, ...args: number[]): VideoInfo[] {
+    return this.ctx.storage.sql
+      .exec<{ id: number; prompt: string; model: string; type: string; created_at: string }>(query, ...args)
+      .toArray()
+      .map((r) => ({ id: r.id, prompt: r.prompt, model: r.model, type: r.type, createdAt: r.created_at }))
   }
 
   async saveItem(text: string, source: string): Promise<Saved> {

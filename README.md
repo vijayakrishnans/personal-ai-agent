@@ -153,6 +153,7 @@ and a sleeping Space wakes on the first call, which can take a while.
 | `useSkill` | loads a skill's instructions when a request matches it |
 | `generateImage` | draws a picture and shows it in the chat |
 | `composeMusic` | makes a piece of music (instrumental, or a song from lyrics) and plays it in the chat |
+| `makeVideo` | makes a short video clip from a description (Hugging Face Inference Providers, billed to the owner's account) and plays it in the chat |
 
 Every model, tools or not, is told the 30 most recent facts in its system
 prompt. Only a model that calls tools can save new ones. Spaces see your
@@ -210,6 +211,21 @@ carry on with it, or **✕** to delete it. **New chat** starts a fresh one;
   every anonymous caller. A Space is run by its owner and can change or go
   away; the other model is then a click away. Check a model's terms before
   using a track commercially.
+
+- **Video.** Ask for "a video of an old man fishing on a misty lake at dawn"
+  or use + Tools → **Make a video**. The agent writes a prompt for a
+  text-to-video model and makes a short clip (a few seconds). This takes a few
+  minutes. The clip plays in the chat with a download link and goes into your
+  library (the newest 20). It runs on Hugging Face Inference Providers
+  (fal-ai) with your Hugging Face token and is **billed to your Hugging Face
+  account**. A video costs far more than a chat answer, so a free account's
+  monthly credits may not cover one; Hugging Face PRO gives more. When credits
+  run out, the agent says so. Choose the model in Settings (☰) → **Models** →
+  **Video model**: Wan 2.2 5B (the default, cheapest), LTX-Video, Wan 2.2
+  A14B or HunyuanVideo 1.5. You can also paste any other text-to-video model
+  that fal-ai serves. Before adding it, the agent checks the Hub and says why
+  if it can't use the model: no such model, it needs a starting picture
+  (image-to-video), or no fal-ai provider serves it.
 
 ## Skills
 
@@ -405,17 +421,19 @@ Two ways to stop the agent, both reversible:
 | Route | Answers |
 |---|---|
 | `GET /` | the agent's page: chat, conversations, model picker, settings |
-| `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…], "modes"?: [one or more of "knowledge"\|"web"\|"research"\|"news"\|"wikipedia"\|"weather"\|"map"\|"travel"\|"image"\|"music"\|"calculate"]}` → `{"text", "model", "tools", "images"?, "maps"?, "tracks"?}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
+| `POST /api/chat` | `{"model"?: key, "messages": [{role, content}…], "modes"?: [one or more of "knowledge"\|"web"\|"research"\|"news"\|"wikipedia"\|"weather"\|"map"\|"travel"\|"image"\|"music"\|"video"\|"calculate"]}` → `{"text", "model", "tools", "images"?, "maps"?, "tracks"?, "videos"?}`. Unknown model `400`; a Hugging Face model with no `HF_TOKEN` `409`; a provider failure `502`, naming the model |
 | `GET /api/conversations` (`?q=`, `?limit=`), `GET`/`PUT`/`DELETE /api/conversations/<id>` (`{messages, title?}`) | your conversations: the newest first, or those a search finds; one opened, saved (secrets taken out) or deleted |
 | `GET /api/models`, `POST /api/models`, `DELETE /api/models/<provider>/<owner>/<name>` | the models it offers; add or remove a Hugging Face model or Space |
 | `GET /api/notes`, `POST /api/notes` (`{text, list?, keepDays?: 2\|7\|null}`), `PATCH /api/notes/<id>` (`{done?, text?, list?, keepDays?}`), `DELETE /api/notes/<id>` | your notes and to-dos; each expires `keepDays` from now (2 by default), `null` for good |
 | `GET /api/images/<id>` | an image the agent drew (JPEG or PNG) |
 | `GET /api/images`, `DELETE /api/images/<id>` | the library's images |
 | `GET /api/music`, `GET /api/music/<id>` (the audio), `DELETE /api/music/<id>` | the music it made |
+| `GET /api/videos`, `GET /api/videos/<id>` (the clip), `DELETE /api/videos/<id>` | the videos it made |
+| `POST /api/video-models` (`{id}`), `DELETE /api/video-models/<owner>/<name>` | add a text-to-video model (checked on the Hub; `422` with the reason if it cannot be used) or remove one |
 | `GET /api/saved`, `POST /api/saved` (`{text, source?}`), `DELETE /api/saved/<id>` | saved answers |
 | `GET /api/skills`, `PUT /api/skills/<name>` (`{description, instructions}`), `DELETE /api/skills/<name>` | the skills, built in and your own |
 | `GET /api/activity` | the activity log: the last 100 tool calls, with their outcome (`ok`, `blocked`, `error`) |
-| `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?, musicModel?}`) | the pause, and which models draw images and make music |
+| `GET /api/state`, `PUT /api/state` (`{paused?, imageModel?, musicModel?, videoModel?}`) | the pause, and which models draw images, make music and make video |
 | `GET /api/memories`, `POST /api/memories` (`{text, space?, question?}`), `PATCH /api/memories/<id>` (`{space}`), `DELETE /api/memories/<id>` | what it remembers, and the space each fact is in |
 | `GET /health` | `{"status":"ok","name":…,"environment":…,"access":…,"killSwitch":…,"huggingface":…,"webSearch":…,"models":…,"tools":[…],"endpoints":…}`. This is what the deploy's smoke and an operator's probe read. It shows names only, never a key |
 | anything else | `404 Not Found` |

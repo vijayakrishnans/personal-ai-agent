@@ -45,6 +45,7 @@ const SCRIPT = String.raw`
   let chosenImageModel = '';
   let musicModels = [];
   let chosenMusicModel = '';
+  let chosenVideoModel = '';
   function renderImageModels() {
     $('image-model').replaceChildren(...imageModels.map((m) => { const o = new Option(m.label, m.id); o.selected = m.id === chosenImageModel; return o; }));
   }
@@ -170,9 +171,10 @@ const SCRIPT = String.raw`
     else div.append(el('div', { className: 'said', textContent: m.content }));
     for (const im of m.images || []) div.appendChild(picture(im));
     for (const t of m.tracks || []) div.appendChild(trackView(t));
+    for (const vid of m.videos || []) div.appendChild(videoView(vid));
     for (const v of m.maps || []) div.appendChild(mapView(v));
     if (m.meta) div.append(el('span', { className: 'meta', textContent: m.meta }));
-    if (!m.error && (m.content || (m.images || []).length || (m.tracks || []).length) && m.content !== '…') div.appendChild(actions(m, i));
+    if (!m.error && (m.content || (m.images || []).length || (m.tracks || []).length || (m.videos || []).length) && m.content !== '…') div.appendChild(actions(m, i));
     $('log').appendChild(div);
     $('log').scrollTop = $('log').scrollHeight;
     return div;
@@ -222,11 +224,12 @@ const SCRIPT = String.raw`
   function markdownOf(list) {
     const out = [];
     for (const m of list) {
-      if (m.error || !(m.content || (m.images || []).length || (m.tracks || []).length || (m.maps || []).length)) continue;
+      if (m.error || !(m.content || (m.images || []).length || (m.tracks || []).length || (m.videos || []).length || (m.maps || []).length)) continue;
       out.push(m.role === 'user' ? '## You asked' : '## ' + (m.meta ? m.meta.split(' · ')[0] : 'Answer'));
       if (m.content) out.push(m.content.trim());
       for (const im of m.images || []) out.push('*Picture:* ' + im.prompt);
       for (const t of m.tracks || []) out.push('*Music:* ' + t.style + (t.seconds ? ' (' + t.seconds + ' s)' : ''));
+      for (const vid of m.videos || []) out.push('*Video:* ' + vid.prompt);
       for (const v of m.maps || []) {
         const lines = ['*Map:* ' + v.title];
         for (const p of v.places || []) lines.push('- [' + p.name + '](' + p.url + ')');
@@ -339,6 +342,7 @@ const SCRIPT = String.raw`
       first = false;
     }
     for (const t of m.tracks || []) blocks.push({ text: '♪ Music: ' + t.style + (t.seconds ? ' (' + t.seconds + ' s)' : ''), size: 14, color: '#6b6b66', gap: 12 });
+    for (const vid of m.videos || []) blocks.push({ text: '▶ Video: ' + vid.prompt, size: 14, color: '#6b6b66', gap: 12 });
     for (const v of m.maps || []) blocks.push({ text: 'Map: ' + v.title + (v.route ? ' — ' + v.route.km + ' km, ' + duration(v.route.minutes) + ' by ' + v.route.mode : ''), size: 14, color: '#6b6b66', gap: 12 });
     const pics = [];
     for (const im of m.images || []) {
@@ -517,6 +521,24 @@ const SCRIPT = String.raw`
     return box;
   }
 
+  // VIDEOS the agent made: played from a blob fetched with the key, like music.
+  const clips = new Map();
+  function videoView(vid) {
+    const video = el('video', { controls: true, preload: 'none', playsInline: true });
+    const download = el('a', { className: 'button', textContent: 'Download', href: '#' });
+    const load = () => {
+      if (clips.has(vid.id)) return Promise.resolve(clips.get(vid.id));
+      return fetch('/api/videos/' + vid.id, { headers: { authorization: 'Bearer ' + key } })
+        .then((res) => (res.ok ? res.blob() : Promise.reject(new Error('gone'))))
+        .then((blob) => { const url = URL.createObjectURL(blob); clips.set(vid.id, { url, type: blob.type }); return clips.get(vid.id); });
+    };
+    load().then((c) => { video.src = c.url; }, () => { box.replaceChildren(el('span', { className: 'meta', textContent: '(video no longer kept: ' + vid.prompt + ')' })); });
+    download.onclick = (e) => { e.preventDefault(); load().then((c) => { el('a', { href: c.url, download: 'video-' + vid.id + (/webm/.test(c.type) ? '.webm' : '.mp4') }).click(); }, () => {}); };
+    const box = el('div', { className: 'track clip' }, el('div', { className: 'track-head' }, el('span', { className: 'track-icon', textContent: '▶' }),
+      el('span', { className: 'track-style', textContent: vid.prompt, title: vid.prompt })), video, el('div', { className: 'row' }, download));
+    return box;
+  }
+
   // CONVERSATIONS: the sidebar shows the latest few, or what a search finds.
   // The one open is saved after every answer.
   let chatsOpen = false;
@@ -570,6 +592,7 @@ const SCRIPT = String.raw`
       ...(m.meta ? { meta: m.meta.slice(0, 400) } : {}), ...(m.error ? { error: true } : {}),
       ...(m.images ? { images: m.images.map((im) => ({ id: im.id, prompt: im.prompt })) } : {}),
       ...(m.tracks ? { tracks: m.tracks.map((t) => ({ id: t.id, style: t.style, seconds: t.seconds })) } : {}),
+      ...(m.videos ? { videos: m.videos.slice(0, 2).map((vid) => ({ id: vid.id, prompt: String(vid.prompt).slice(0, 2000) })) } : {}),
       ...(m.maps ? { maps: m.maps } : {}),
     }));
     await api('/api/conversations/' + encodeURIComponent(convId), { method: 'PUT', body: JSON.stringify({ messages: kept }) });
@@ -589,6 +612,7 @@ const SCRIPT = String.raw`
     ['travel', 'Plan a trip', 'Route, sights, stays, weather, budget'],
     ['image', 'Draw an image', 'Make a picture from a description'],
     ['music', 'Make music', 'A track or a song, in a minute or two'],
+    ['video', 'Make a video', 'A short clip from a description, in a few minutes'],
     ['calculate', 'Calculate', 'Work out the numbers exactly'],
   ];
   const COMBOS = [
@@ -657,7 +681,10 @@ const SCRIPT = String.raw`
 
   // THE LIBRARY: every image the agent drew, and every answer kept whole.
   async function loadLibrary() {
-    const [{ images }, { saved }, { tracks }] = await Promise.all([api('/api/images'), api('/api/saved'), api('/api/music')]);
+    const [{ images }, { saved }, { tracks }, { videos }] = await Promise.all([api('/api/images'), api('/api/saved'), api('/api/music'), api('/api/videos')]);
+    $('library-videos').replaceChildren(...(videos.length ? videos.map((vid) => el('li', {}, videoView(vid), el('div', { className: 'row' },
+      el('span', { className: 'hint', style: 'flex:1', textContent: new Date(vid.createdAt).toLocaleString() + ' · ' + vid.model.split('/').pop() }),
+      el('button', { type: 'button', textContent: 'Delete', onclick: async () => { if (confirm('Delete this video?')) { await api('/api/videos/' + vid.id, { method: 'DELETE' }); loadLibrary(); } } })))) : [li('No videos yet. Ask your agent for one, or use + Tools → Make a video.')]));
     $('library-music').replaceChildren(...(tracks.length ? tracks.map((t) => el('li', {}, trackView(t), el('div', { className: 'row' },
       el('span', { className: 'hint', style: 'flex:1', textContent: new Date(t.createdAt).toLocaleString() + ' · ' + t.model.split('/').pop() + (t.lyrics ? ' · with lyrics' : ' · instrumental') }),
       el('button', { type: 'button', textContent: 'Delete', onclick: async () => { if (confirm('Delete this track?')) { await api('/api/music/' + t.id, { method: 'DELETE' }); loadLibrary(); } } })))) : [li('No music yet. Ask your agent to make some, or use + Tools → Make music.')]));
@@ -709,6 +736,13 @@ const SCRIPT = String.raw`
     imageModels = body.images.models;
     musicModels = (body.music || { models: [] }).models;
     $('music-model').replaceChildren(...musicModels.map((m) => { const o = new Option(m.label, m.id); o.selected = m.id === chosenMusicModel; return o; }));
+    const videoModels = (body.video || { models: [] }).models;
+    $('video-model').replaceChildren(...videoModels.map((m) => { const o = new Option(m.label, m.id); o.selected = m.id === chosenVideoModel; return o; }));
+    const addedVideos = videoModels.filter((m) => m.added);
+    $('added-videos').replaceChildren(...addedVideos.map((m) => li(m.id, async () => {
+      await api('/api/video-models/' + m.id.split('/').map(encodeURIComponent).join('/'), { method: 'DELETE' });
+      chosenVideoModel = (await api('/api/state')).videoModel; loadModels();
+    })));
     const added = models.filter((m) => m.source === 'added');
     $('added').replaceChildren(...(added.length ? added.map((m) => li(m.label, async () => {
       await api('/api/models/' + [m.provider, ...m.id.split('/')].map(encodeURIComponent).join('/'), { method: 'DELETE' }); loadModels();
@@ -998,7 +1032,7 @@ const SCRIPT = String.raw`
   async function start() {
     $('lock').hidden = true;
     const st = await api('/api/state');
-    showPaused(st.paused); chosenImageModel = st.imageModel; chosenMusicModel = st.musicModel;
+    showPaused(st.paused); chosenImageModel = st.imageModel; chosenMusicModel = st.musicModel; chosenVideoModel = st.videoModel;
     await loadModels(); await loadMemories();
     // The open conversation, as last saved; one kept only in this browser
     // (from before conversations were saved) is saved now.
@@ -1055,6 +1089,21 @@ const SCRIPT = String.raw`
   $('image-model').onchange = async () => {
     try { chosenImageModel = (await api('/api/state', { method: 'PUT', body: JSON.stringify({ imageModel: $('image-model').value }) })).imageModel; $('image-note').textContent = 'Saved: new pictures use it.'; }
     catch (err) { $('image-note').textContent = err.message; }
+  };
+  $('video-model').onchange = async () => {
+    try { chosenVideoModel = (await api('/api/state', { method: 'PUT', body: JSON.stringify({ videoModel: $('video-model').value }) })).videoModel; $('add-video-note').textContent = 'Saved: new videos use it.'; }
+    catch (err) { $('add-video-note').textContent = err.message; }
+  };
+  $('add-video').onsubmit = async (e) => {
+    e.preventDefault();
+    const pasted = $('add-video-id').value.trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
+    const link = /^(?:https?:\/\/)?(?:www\.)?(?:hf\.co|huggingface\.co)\/([^/\s]+\/[^/\s]+)/i.exec(pasted);
+    const id = link ? link[1] : pasted;
+    $('add-video-note').textContent = 'Checking ' + id + ' on Hugging Face…';
+    try {
+      const { note } = await api('/api/video-models', { method: 'POST', body: JSON.stringify({ id }) });
+      $('add-video').reset(); chosenVideoModel = id; await loadModels(); $('add-video-note').textContent = note;
+    } catch (err) { $('add-video-note').textContent = err.message; }
   };
   $('music-model').onchange = async () => {
     try { chosenMusicModel = (await api('/api/state', { method: 'PUT', body: JSON.stringify({ musicModel: $('music-model').value }) })).musicModel; $('music-note').textContent = 'Saved: new music uses it.'; }
@@ -1119,6 +1168,7 @@ const SCRIPT = String.raw`
     messages.push({ role: 'user', content: text }); bubble(messages[messages.length - 1], messages.length - 1);
     const pending = bubble({ role: 'assistant', content: '…' }, -1);
     if (using.includes('music') || /\b(music|song|track|tune|melody|beat)\b/i.test(text)) pending.append(el('span', { className: 'meta', textContent: 'Music takes a minute or two to make…' }));
+    if (using.includes('video') || /\b(video|clip|animation|animate)\b/i.test(text)) pending.append(el('span', { className: 'meta', textContent: 'A video takes a few minutes to make…' }));
     $('send').disabled = true;
     try {
       // What a model is sent: the words only (an image or a map is shown, not resent).
@@ -1129,7 +1179,7 @@ const SCRIPT = String.raw`
       // words here too, so neither this browser nor the saved conversation holds it.
       if (reply.said) { messages[messages.length - 1].content = reply.said; render(); }
       const kept = reply.redacted ? ' · kept ' + reply.redacted + (reply.redacted === 1 ? ' secret' : ' secrets') + ' out' : '';
-      messages.push({ role: 'assistant', content: reply.text || (reply.images || reply.maps || reply.tracks ? '' : '(no answer)'), images: reply.images, maps: reply.maps, tracks: reply.tracks, meta: label + (reply.tools.length ? ' · used ' + reply.tools.join(', ') : '') + kept });
+      messages.push({ role: 'assistant', content: reply.text || (reply.images || reply.maps || reply.tracks || reply.videos ? '' : '(no answer)'), images: reply.images, maps: reply.maps, tracks: reply.tracks, videos: reply.videos, meta: label + (reply.tools.length ? ' · used ' + reply.tools.join(', ') : '') + kept });
       if (reply.tools.some((t) => t === 'remember' || t === 'forget')) loadMemories();
       if (reply.tools.some((t) => /Note/.test(t)) && !$('tab-notes').hidden) loadNotes();
     } catch (err) {
@@ -1194,7 +1244,10 @@ main{flex:1;display:flex;min-height:0}
 .track-icon{color:var(--accent);font-size:18px}
 .track-style{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
 .track audio{width:100%}
+.clip video{width:100%;max-height:420px;border-radius:8px;background:#000}
 .track .row a{font-size:12px;padding:2px 8px}
+#library-videos{list-style:none;margin:0;padding:0;display:grid;gap:12px;max-width:560px}
+#library-videos>li>.row{align-items:center}#library-videos>li>.row button{font-size:12px;padding:2px 8px}
 #library-music{list-style:none;margin:0;padding:0;display:grid;gap:12px;max-width:560px}
 #library-music>li>.row{align-items:center}#library-music>li>.row button{font-size:12px;padding:2px 8px}
 .map-wrap{margin:8px 0 0;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-width:0}
@@ -1410,7 +1463,7 @@ input,select,textarea{font-size:16px}
         <h2>Yours</h2>
         <button type="button" class="tile" id="open-graph"><span class="tile-icon" aria-hidden="true">◎</span><span class="tile-text"><strong>Knowledge</strong><small id="memory-count">What it knows about you</small></span><span class="tile-go" aria-hidden="true">›</span></button>
         <button type="button" class="tile" id="open-notes"><span class="tile-icon" aria-hidden="true">✎</span><span class="tile-text"><strong>Notes</strong><small id="notes-count">Short-lived notes and to-dos</small></span><span class="tile-go" aria-hidden="true">›</span></button>
-        <button type="button" class="tile" id="open-library"><span class="tile-icon" aria-hidden="true">♪</span><span class="tile-text"><strong>Library</strong><small>Images, music, answers kept whole</small></span><span class="tile-go" aria-hidden="true">›</span></button>
+        <button type="button" class="tile" id="open-library"><span class="tile-icon" aria-hidden="true">♪</span><span class="tile-text"><strong>Library</strong><small>Images, music, videos, answers kept whole</small></span><span class="tile-go" aria-hidden="true">›</span></button>
       </section>
     </div>
     <div id="side-foot"><button type="button" id="collapse" title="Collapse the sidebar">‹ Collapse</button></div>
@@ -1493,6 +1546,10 @@ input,select,textarea{font-size:16px}
           <h2>Music</h2>
           <ul id="library-music"></ul>
         </section>
+        <section>
+          <h2>Videos</h2>
+          <ul id="library-videos"></ul>
+        </section>
         <section style="max-width:760px">
           <h2>Kept whole</h2>
           <ul class="items" id="library-saved"></ul>
@@ -1510,6 +1567,17 @@ input,select,textarea{font-size:16px}
           <h2>Music model</h2>
           <select id="music-model" aria-label="Music model"></select>
           <p class="hint" id="music-note">Makes the music you ask for, on a free Hugging Face Space. It takes a minute or two; with a Hugging Face token saved it uses your own free GPU allowance.</p>
+        </section>
+        <section>
+          <h2>Video model</h2>
+          <select id="video-model" aria-label="Video model"></select>
+          <p class="hint" id="video-note">Makes short clips from a description on Hugging Face Inference Providers (fal-ai), with your Hugging Face token. It takes a few minutes and is billed to your Hugging Face account: a video costs much more than a chat answer, so a free account’s monthly credits may not cover one — PRO gives more.</p>
+          <form class="row" id="add-video">
+            <input id="add-video-id" placeholder="Paste a text-to-video model — e.g. Wan-AI/Wan2.1-T2V-14B" style="flex:1" required>
+            <button>Add</button>
+          </form>
+          <ul class="items" id="added-videos"></ul>
+          <p class="hint" id="add-video-note" role="status"></p>
         </section>
         <section>
           <h2>Hugging Face token</h2>

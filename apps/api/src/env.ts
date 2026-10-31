@@ -38,6 +38,8 @@ export type Env = {
   HF_ROUTER_URL?: string
   HF_HUB_URL?: string
   HF_SPACES_URL?: string
+  // TEST ONLY — the first wait between video status checks (video.ts), in ms.
+  VIDEO_POLL_MS?: string
   // TEST ONLY — where the news feed and web search are (web.ts), and the open
   // services the agent looks things up in (lookup.ts).
   NEWS_URL?: string
