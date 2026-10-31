@@ -96,9 +96,24 @@ describe("POST /api/chat — Hugging Face", () => {
     const res = await app.request("/api/chat", chat("huggingface:openai/gpt-oss-120b", "hi"), x);
     const raw = await res.text();
     expect(res.status).toBe(502);
-    expect(JSON.parse(raw).error).toBe("model_failed");
-    expect(raw).toContain("openai/gpt-oss-120b · Hugging Face failed");
+    expect(JSON.parse(raw)).toMatchObject({ error: "model_failed", reason: "token_rejected" });
+    expect(raw).toContain("openai/gpt-oss-120b: Hugging Face refused your token");
     expect(raw).not.toContain("hf_wrong");
+  });
+
+  it("names the reason when credits are used up, a licence is not accepted, or the model is not for chat", async () => {
+    const x = hfEnv({ HF_MODELS: "broke/credits,gated/model,Wan-AI/Wan2.2-I2V-A14B" });
+    const cases: [string, string, string][] = [
+      ["broke/credits", "credits_used_up", "used up its Inference Providers credits for this month"],
+      ["gated/model", "token_not_allowed", "accept it at huggingface.co/gated/model"],
+      ["Wan-AI/Wan2.2-I2V-A14B", "not_a_chat_model", "this is not a chat model"],
+    ];
+    for (const [id, reason, says] of cases) {
+      const res = await app.request("/api/chat", chat(`huggingface:${id}`, "hi"), x);
+      const body = await json(res);
+      expect([res.status, body.reason], id).toEqual([502, reason]);
+      expect(body.message).toContain(says);
+    }
   });
 
   it("calls a Space added in the page with the owner's last message", async () => {

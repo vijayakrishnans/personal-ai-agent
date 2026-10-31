@@ -94,6 +94,15 @@ Then add models in either of two ways:
     provider's name (`:groq`, `:together`, …) to choose how the router picks a
     provider. Leave **Let it use the agent's tools** on for models that call
     tools. If a provider refuses tools, the agent asks again without them.
+    You can paste the bare id or the model's huggingface.co link (a Space's
+    link and `@cf/…` ids pick their own kind). Before saving, the agent asks
+    the Hub about the model. It refuses, and says why, when the model does not
+    exist, is not a chat model (a video, image or speech model), has no
+    Inference Provider serving it, or your token is refused. When it adds the
+    model, it lists the providers serving it and warns you if the model is
+    gated. If chatting with a model fails later, the message says why: the
+    token was refused or lacks permission, the month's credits are used up,
+    the licence isn't accepted yet, or the model isn't for chat.
   - **Gradio Space**: `<owner>/<space>`, such as your own Space. The agent
     calls its `chat` endpoint (what `gr.ChatInterface` exposes), or the
     endpoint you name. It sends your last message and shows the endpoint's

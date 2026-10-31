@@ -131,6 +131,14 @@ const body = (req: IncomingMessage) =>
     req.on("end", () => resolve(raw));
   });
 
+/** The Hub's models in the stand-in: chat providers, or another task's. */
+const HUB_MODELS: Record<string, { providers: string[]; task?: string; pipeline_tag?: string; gated?: boolean | string }> = {
+  "meta-llama/Llama-3.3-70B-Instruct": { providers: ["groq", "novita"], pipeline_tag: "text-generation", gated: "manual" },
+  "Qwen/Qwen3.8-27B": { providers: ["novita", "cerebras", "nscale", "featherless-ai", "scaleway"], pipeline_tag: "image-text-to-text", gated: false },
+  "Wan-AI/Wan2.2-I2V-A14B": { providers: ["fal-ai"], task: "image-to-video", pipeline_tag: "image-to-video" },
+  "some/unserved": { providers: [], pipeline_tag: "text-generation" },
+};
+
 export type HfCall = { method: string; path: string; auth: string; body: unknown };
 
 /**
@@ -156,9 +164,22 @@ export async function hfStandIn() {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(b));
     };
+    // The Hub's record of a model: its task and which providers serve it.
+    const hub = /^\/api\/models\/([^/?]+\/[^/?]+)\?/.exec(path);
+    if (hub && req.method === "GET") {
+      if (req.headers.authorization && req.headers.authorization !== `Bearer ${HF_TOKEN}`) return json(401, { error: "Invalid credentials in Authorization header" });
+      const chat = (...names: string[]) => Object.fromEntries(names.map((n) => [n, { status: "live", providerId: n, task: "conversational" }]));
+      const record = HUB_MODELS[hub[1] ?? ""];
+      if (!record) return json(404, { error: "Repository not found" });
+      const { providers, task, ...rest } = record;
+      return json(200, { id: hub[1], ...rest, inferenceProviderMapping: task ? Object.fromEntries(providers.map((n) => [n, { status: "live", providerId: n, task }])) : chat(...providers) });
+    }
     if (path === "/v1/chat/completions") {
       if (req.headers.authorization !== `Bearer ${HF_TOKEN}`) return json(401, { error: "Invalid credentials in Authorization header" });
       const b = parsed as { model: string; messages: { role: string; content: unknown }[]; tools?: { function: { name: string } }[] };
+      if (b.model === "broke/credits") return json(402, { error: "You have exceeded your monthly included credits for Inference Providers." });
+      if (b.model === "gated/model") return json(403, { error: "Access to model gated/model is restricted." });
+      if (b.model === "Wan-AI/Wan2.2-I2V-A14B") return json(400, { error: { message: "The requested model 'Wan-AI/Wan2.2-I2V-A14B' is not a chat model." } });
       if (b.model.endsWith(":notools") && b.tools?.length) return json(400, { error: { message: "This model does not support tools" } });
       const choice = answer(b.messages, (b.tools ?? []).map((t) => t.function.name), b.model, asked);
       return json(200, { id: "chatcmpl-1", object: "chat.completion", created: 1, model: b.model, choices: [{ index: 0, ...choice }], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } });
@@ -224,7 +245,7 @@ export async function hfStandIn() {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as AddressInfo;
   const url = `http://127.0.0.1:${port}`;
-  return { router: `${url}/v1`, spaces: `${url}/spaces`, calls, asked, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return { router: `${url}/v1`, spaces: `${url}/spaces`, hub: url, calls, asked, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
 export const TAVILY_KEY = "tvly-test-key";

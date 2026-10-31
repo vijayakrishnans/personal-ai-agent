@@ -21,6 +21,7 @@ import {
 } from './memory'
 import { API_NAME_PATTERN, catalog, DEFAULT_MODEL, HF_MODEL_ID, modelKey, parseHfModels, SPACE_ID, WORKERS_AI_ID, WORKERS_AI_MODELS } from './models'
 import { SpaceError } from './spaces'
+import { checkHubModel, hfFailure } from './hub'
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, imageModel, imageType } from './images'
 import { DEFAULT_MUSIC_MODEL, MUSIC_MODELS, musicModel } from './music'
 import { hasSecret, redact } from './secrets'
@@ -138,6 +139,12 @@ app.post('/api/models', async (c) => {
   const parsed = AddModel.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ ok: false, error: 'invalid_model', message: parsed.error.issues.map((i) => i.message).join('; ') }, 400)
   const m = parsed.data
+  // A Hugging Face model is checked on the Hub first: one that does not
+  // exist, is not a chat model or that no provider serves is refused with
+  // the reason, not added to fail on the first message. (422, never 401 or
+  // 503: the page locks itself on those.)
+  const hub = m.provider === 'huggingface' ? await checkHubModel(c.env, m.id) : null
+  if (hub && !hub.ok) return c.json({ ok: false, error: hub.error, message: hub.message }, hub.status)
   const stored =
     m.provider === 'space'
       ? { provider: m.provider, id: m.id, label: m.label ?? `${m.id} · Space`, tools: false, apiName: m.apiName }
@@ -150,7 +157,7 @@ app.post('/api/models', async (c) => {
     return c.json({ ok: false, error: 'too_many_models', message: String((error as Error).message) }, 409)
   }
   const entry = (await models(c)).find((e) => e.key === modelKey(m.provider, m.id))
-  return c.json({ ok: true, model: entry }, 201)
+  return c.json({ ok: true, model: entry, ...(hub?.ok ? { note: hub.note, providers: hub.providers, gated: hub.gated } : {}) }, 201)
 })
 
 // Only a model added in the page can be removed there: the built-in ones are
@@ -447,6 +454,10 @@ app.post('/api/chat', async (c) => {
     // The model's provider failed, not this Worker: say which. The message
     // is the provider's own; it carries no key of ours.
     console.error('model call failed', entry.key, error)
+    // A Hugging Face refusal is named: the token, the month's credits, a
+    // licence to accept, a model that is not for chat.
+    const hf = hfFailure(entry, error)
+    if (hf) return c.json({ ok: false, error: 'model_failed', reason: hf.reason, message: hf.message }, 502)
     const message = error instanceof SpaceError ? error.message : `${entry.label} failed: ${String((error as Error)?.message ?? error).slice(0, 300)}`
     return c.json({ ok: false, error: 'model_failed', message }, 502)
   }
