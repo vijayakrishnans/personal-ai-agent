@@ -192,12 +192,24 @@ export async function hfStandIn() {
       const url = style.includes("elsewhere") ? "https://evil.example/x.mp3" : `${base}/gradio_api/file=/tmp/gradio/out.mp3`;
       return res.end(`event: heartbeat\ndata: null\n\nevent: complete\ndata: ${JSON.stringify([{ path: "/tmp/gradio/out.mp3", url, orig_name: "out.mp3", meta: { _type: "gradio.FileData" } }, { done: true }])}\n\n`);
     }
+    // me/multi is a gr.Blocks Space: a multimodal box and a switch, at chat_fn.
+    const info = /^\/spaces\/([^/]+\/[^/]+)\/gradio_api\/info$/.exec(path);
+    if (info && req.method === "GET") {
+      if (info[1] !== "me/multi") return json(404, { detail: "Not Found" });
+      const parameters = [
+        { parameter_name: "message", parameter_default: { text: "", files: [] }, python_type: { type: "dict(text: str, files: list[filepath])" } },
+        { parameter_name: "speak", parameter_default: false, python_type: { type: "bool" } },
+      ];
+      return json(200, { named_endpoints: { "/chat_fn": { parameters } } });
+    }
     const start = /^\/spaces\/([^/]+\/[^/]+)\/gradio_api\/call\/([\w-]+)$/.exec(path);
     if (start && req.method === "POST") {
       const [, space, endpoint] = start;
-      if (endpoint !== "chat") return json(404, { detail: "Not Found" });
+      if (endpoint !== (space === "me/multi" ? "chat_fn" : "chat")) return json(404, { detail: "Not Found" });
+      const [first] = (parsed as { data: unknown[] }).data;
+      const text = typeof first === "string" ? first : (first as { text?: string })?.text;
       const id = `ev${jobs.size + 1}`;
-      jobs.set(id, `${space} says: ${(parsed as { data: string[] }).data[0]}`);
+      jobs.set(id, typeof text === "string" ? `${space} says: ${text}` : "explode");
       return json(200, { event_id: id });
     }
     const result = /^\/spaces\/[^/]+\/[^/]+\/gradio_api\/call\/[\w-]+\/(\w+)$/.exec(path);
