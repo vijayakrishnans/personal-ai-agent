@@ -534,7 +534,7 @@ const SCRIPT = String.raw`
     };
     load().then((c) => { video.src = c.url; }, () => { box.replaceChildren(el('span', { className: 'meta', textContent: '(video no longer kept: ' + vid.prompt + ')' })); });
     download.onclick = (e) => { e.preventDefault(); load().then((c) => { el('a', { href: c.url, download: 'video-' + vid.id + (/webm/.test(c.type) ? '.webm' : '.mp4') }).click(); }, () => {}); };
-    const box = el('div', { className: 'track clip' }, el('div', { className: 'track-head' }, el('span', { className: 'track-icon', textContent: '▶' }),
+    const box = el('div', { className: 'track video-card' }, el('div', { className: 'track-head' }, el('span', { className: 'track-icon', textContent: '▶' }),
       el('span', { className: 'track-style', textContent: vid.prompt, title: vid.prompt })), video, el('div', { className: 'row' }, download));
     return box;
   }
@@ -1244,7 +1244,7 @@ main{flex:1;display:flex;min-height:0}
 .track-icon{color:var(--accent);font-size:18px}
 .track-style{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
 .track audio{width:100%}
-.clip video{width:100%;max-height:420px;border-radius:8px;background:#000}
+.video-card video{width:100%;max-height:420px;border-radius:8px;background:#000}
 .track .row a{font-size:12px;padding:2px 8px}
 #library-videos{list-style:none;margin:0;padding:0;display:grid;gap:12px;max-width:560px}
 #library-videos>li>.row{align-items:center}#library-videos>li>.row button{font-size:12px;padding:2px 8px}
