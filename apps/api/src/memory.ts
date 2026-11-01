@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers'
 import { MAX_SKILLS, type Skill } from './skills'
+import { BACKFILL_PER_RECALL, byMeaning, byWords, decodeVector, embed, embeddedText, EMBEDDING_MODEL, encodeVector, fuse } from './recall'
 
 // THE AGENT'S MEMORY: one SQLite-backed Durable Object per environment, named
 // `owner` (memoryOf below). It keeps what outlives a chat — the facts the
@@ -182,6 +183,11 @@ export class AgentMemory extends DurableObject implements MemoryStore {
           text TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS memory_vectors (
+          memory_id INTEGER PRIMARY KEY,
+          model TEXT NOT NULL,
+          vector TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS models (
           provider TEXT NOT NULL,
           id TEXT NOT NULL,
@@ -293,19 +299,71 @@ export class AgentMemory extends DurableObject implements MemoryStore {
     const row = sql.exec<{ id: number }>('INSERT INTO memories (text, space, question, created_at) VALUES (?, ?, ?, ?) RETURNING id', clean, filed, asked, createdAt).one()
     // The oldest go first once the store is full, so it never grows unbounded.
     sql.exec('DELETE FROM memories WHERE id NOT IN (SELECT id FROM memories ORDER BY id DESC LIMIT ?)', MAX_MEMORIES)
+    sql.exec('DELETE FROM memory_vectors WHERE memory_id NOT IN (SELECT id FROM memories)')
+    // Its meaning, for recall. If Workers AI fails now, recall fills it in later.
+    await this.embedMemories([{ id: row.id, text: clean, question: asked }])
     return { id: row.id, text: clean, space: filed, question: asked, createdAt }
   }
 
+  private get ai(): Ai | undefined {
+    return (this.env as unknown as { AI?: Ai }).AI
+  }
+
+  /** Embeds and keeps the vectors of these memories; false when Workers AI could not. */
+  private async embedMemories(memories: { id: number; text: string; question: string | null }[]): Promise<boolean> {
+    const vectors = await embed(this.ai, memories.map(embeddedText))
+    if (!vectors) return false
+    const sql = this.ctx.storage.sql
+    memories.forEach((m, i) => {
+      sql.exec(
+        'INSERT INTO memory_vectors (memory_id, model, vector) VALUES (?, ?, ?) ON CONFLICT (memory_id) DO UPDATE SET model = excluded.model, vector = excluded.vector',
+        m.id,
+        EMBEDDING_MODEL,
+        encodeVector(vectors[i] as number[]),
+      )
+    })
+    return true
+  }
+
+  // HYBRID RECALL (recall.ts): by the query's words and by its meaning,
+  // merged. Memories kept before embeddings — or when Workers AI failed —
+  // are embedded here, a batch per recall, so meaning catches up by itself.
   async recall(query: string, limit = 10): Promise<Memory[]> {
-    const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 1).slice(0, 8)
+    // Punctuation is not part of a word ("live?" is "live"); a code keeps its hyphens.
+    const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s'-]+/gu, ' ').split(/\s+/).filter((w) => w.length > 1).slice(0, 8)
     if (words.length === 0) return this.listMemories(limit)
-    // A word matches a memory's text or the name of its space.
-    const where = words.map(() => "lower(text || ' ' || space || ' ' || coalesce(question, '')) LIKE ? ESCAPE '\\'").join(' OR ')
-    const args = words.map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
-    return this.rows(`SELECT id, text, space, question, created_at FROM memories WHERE ${where} ORDER BY id DESC LIMIT ?`, ...args, limit)
+    const all = this.rows('SELECT id, text, space, question, created_at FROM memories ORDER BY id DESC')
+    // A word matches a memory's text, its question or the name of its space.
+    const wordRanking = byWords(words, all.map((m) => ({ id: m.id, haystack: `${m.text} ${m.space} ${m.question ?? ''}`.toLowerCase() })))
+    const meaningRanking = await this.rankByMeaning(query, all)
+    const byId = new Map(all.map((m) => [m.id, m]))
+    return fuse(wordRanking, meaningRanking)
+      .slice(0, limit)
+      .map((id) => byId.get(id) as Memory)
+  }
+
+  private async rankByMeaning(query: string, all: Memory[]): Promise<number[]> {
+    if (!this.ai || all.length === 0) return []
+    const sql = this.ctx.storage.sql
+    const kept = new Map(
+      sql
+        .exec<{ memory_id: number; vector: string }>('SELECT memory_id, vector FROM memory_vectors WHERE model = ?', EMBEDDING_MODEL)
+        .toArray()
+        .map((r) => [r.memory_id, r.vector]),
+    )
+    const missing = all.filter((m) => !kept.has(m.id)).slice(0, BACKFILL_PER_RECALL)
+    const [asked] = (await embed(this.ai, [query.slice(0, 2000)])) ?? []
+    if (!asked) return []
+    if (missing.length && (await this.embedMemories(missing))) {
+      for (const r of sql.exec<{ memory_id: number; vector: string }>(`SELECT memory_id, vector FROM memory_vectors WHERE memory_id IN (${missing.map(() => '?').join(',')})`, ...missing.map((m) => m.id)).toArray()) {
+        kept.set(r.memory_id, r.vector)
+      }
+    }
+    return byMeaning(asked, [...kept.entries()].map(([id, vector]) => ({ id, vector: decodeVector(vector) })))
   }
 
   async forget(id: number): Promise<boolean> {
+    this.ctx.storage.sql.exec('DELETE FROM memory_vectors WHERE memory_id = ?', id)
     return this.ctx.storage.sql.exec('DELETE FROM memories WHERE id = ?', id).rowsWritten > 0
   }
 

@@ -36,15 +36,15 @@ export function sqlStorage(db = new DatabaseSync(":memory:")) {
   };
 }
 
-/** One AgentMemory over an in-process SQLite database — a fresh one, or `db` as it already is. */
-export function memoryObject(db?: DatabaseSync) {
+/** One AgentMemory over an in-process SQLite database — a fresh one, or `db` as it already is; with `AI`, it embeds. */
+export function memoryObject(db?: DatabaseSync, AI?: Ai) {
   const ctx = { storage: { sql: sqlStorage(db) }, blockConcurrencyWhile: (fn: () => unknown) => fn() };
-  return new AgentMemory(ctx as unknown as DurableObjectState, {} as Cloudflare.Env);
+  return new AgentMemory(ctx as unknown as DurableObjectState, (AI ? { AI } : {}) as unknown as Cloudflare.Env);
 }
 
 /** The MEMORY namespace with ONE real AgentMemory behind it, as the Worker's `owner` object. */
-export function memoryNamespace(db?: DatabaseSync) {
-  const object = memoryObject(db);
+export function memoryNamespace(db?: DatabaseSync, AI?: Ai) {
+  const object = memoryObject(db, AI);
   const names: string[] = [];
   const ns = {
     idFromName: (name: string) => (names.push(name), { name }),
@@ -97,13 +97,46 @@ export const JPEG_BASE64 = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00
 
 export const PNG_BASE64 = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a));
 
+/**
+ * A tiny, predictable embedding model: words about the same topic share a
+ * dimension (heavily), every other word gets a hashed one (lightly) — so
+ * "where do I live?" lands near "I'm from Kochi" and far from "peanuts".
+ */
+const TOPICS = [
+  ["live", "lives", "home", "from", "kochi", "city", "address", "located"],
+  ["eat", "food", "allergic", "peanuts", "diet", "meal"],
+  ["sister", "brother", "mother", "family", "birthday"],
+  ["work", "job", "office", "meeting", "colleague"],
+];
+export function fakeEmbedding(text: string): number[] {
+  const v = new Array<number>(TOPICS.length + 64).fill(0);
+  for (const word of text.toLowerCase().split(/[^a-z0-9'-]+/).filter(Boolean)) {
+    const topic = TOPICS.findIndex((t) => t.includes(word));
+    if (topic >= 0) v[topic] = (v[topic] ?? 0) + 3;
+    else {
+      let h = 0;
+      for (const ch of word) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      const i = TOPICS.length + (h % 64);
+      v[i] = (v[i] ?? 0) + 1;
+    }
+  }
+  return v;
+}
+
 export function aiStandIn() {
   const asked: Asked[] = [];
+  const embedded: string[] = [];
   const AI = {
     async run(
       model: string,
-      inputs: { prompt?: string; multipart?: { body: ReadableStream; contentType: string }; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[]; tool_choice?: unknown },
+      inputs: { text?: string[]; prompt?: string; multipart?: { body: ReadableStream; contentType: string }; messages?: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[]; tool_choice?: unknown },
     ) {
+      if (model === "@cf/baai/bge-m3") {
+        const texts = inputs.text ?? [];
+        if (texts.some((t) => t.includes("embedfail"))) throw new Error("Workers AI is unavailable");
+        embedded.push(...texts);
+        return { shape: [texts.length, TOPICS.length + 64], data: texts.map(fakeEmbedding) };
+      }
       if (model.includes("flux")) {
         // FLUX.2 takes a multipart form, FLUX.1 JSON; FLUX.2 answers with a PNG here.
         const prompt = inputs.multipart
@@ -121,7 +154,7 @@ export function aiStandIn() {
       return { choices: [choice], usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 } };
     },
   };
-  return { AI: AI as unknown as Ai, asked };
+  return { AI: AI as unknown as Ai, asked, embedded };
 }
 
 const body = (req: IncomingMessage) =>
@@ -389,7 +422,7 @@ export async function webStandIn() {
 /** An Env as a deployment has it; `over` sets what the owner stored. */
 export function env(over: Partial<Env> = {}): Env & { asked: Asked[]; memory: AgentMemory } {
   const { AI, asked } = aiStandIn();
-  const { MEMORY, object } = memoryNamespace();
+  const { MEMORY, object } = memoryNamespace(undefined, AI);
   return { AI, MEMORY, ENVIRONMENT: "stage", asked, memory: object, ...over };
 }
 

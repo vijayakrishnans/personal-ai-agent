@@ -130,7 +130,7 @@ and a sleeping Space wakes on the first call, which can take a while.
 | Tool | What it does |
 |---|---|
 | `remember` | saves one short fact about you, in a space such as Work or Health |
-| `recall` | searches what it remembers, by words in a fact or its space |
+| `recall` | searches what it remembers by **meaning and by words** together (see below) |
 | `forget` | deletes a fact by its number |
 | `addNote`, `listNotes`, `updateNote`, `deleteNote` | your notes and to-do lists |
 | `currentTime` | the date and time in UTC |
@@ -164,6 +164,25 @@ remembers (it reuses one that fits) and `General` when none is named.
 Settings (☰) → **Knowledge** draws them as a graph: you in the centre, each
 space a hub, each fact around its hub. Click a fact to move it to another
 space or remove it, click a space to rename it, or add a fact yourself.
+
+### How recall finds things
+
+`recall` searches in two ways and merges the results:
+
+- **By meaning.** Each fact is turned into an embedding (Workers AI
+  `@cf/baai/bge-m3`, multilingual, through the Worker's own `AI` binding, so
+  no key is needed). The embedding is kept beside the fact in the agent's
+  Durable Object. "Where do I live?" finds "I'm from Kochi" even though they
+  share no words.
+- **By words.** Exact matches still count, ranked by how many of the query's
+  words a fact holds. This catches what meaning can blur: a code like
+  `K7-PX-22`, a number, a rare name.
+
+The two rankings are merged with reciprocal rank fusion, so a fact found both
+ways comes first. With at most 500 facts, comparing against all of them takes
+milliseconds, so there's no vector database. Facts kept before this feature
+are embedded on the next recall, a batch at a time. If Workers AI fails,
+recall falls back to words alone; it never fails because of meaning.
 
 ## On a phone
 
